@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -97,63 +98,48 @@ class _SurahTile extends StatelessWidget {
       );
 }
 
-class SurahReader extends StatelessWidget {
+class SurahReader extends StatefulWidget {
   final int surah;
   final int ayah;
   const SurahReader({super.key, required this.surah, this.ayah = 1});
+  @override
+  State<SurahReader> createState() => _SurahReaderState();
+}
 
-  void _menu(BuildContext context, VerseRef ref) {
-    final d = AppData.I;
-    final text = d.verseText(ref);
-    final usage = d.verseUsage[ref.key] ?? const [];
+class _SurahReaderState extends State<SurahReader> {
+  static const chunk = 8;
+  late final Surah s = AppData.I.surah(widget.surah);
+  late final List<TapGestureRecognizer> taps;
+  late int? selected = widget.ayah > 1 ? widget.ayah : null;
+
+  @override
+  void initState() {
+    super.initState();
+    taps = List.generate(s.uth.length, (i) => TapGestureRecognizer()..onTap = () => _select(i + 1));
+  }
+
+  @override
+  void dispose() {
+    for (final t in taps) {
+      t.dispose();
+    }
+    super.dispose();
+  }
+
+  void _select(int a) {
+    setState(() => selected = a);
+    if (MediaQuery.of(context).size.width < 1100) _sheet(VerseRef(widget.surah, a));
+  }
+
+  void _sheet(VerseRef ref) {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (ctx) => DraggableScrollableSheet(
         expand: false,
-        initialChildSize: usage.isEmpty ? 0.35 : 0.6,
-        builder: (ctx, sc) => ListView(controller: sc, children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            child: Text('﴿$text﴾', style: quranStyle.copyWith(fontSize: 19)),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            child: Text(d.refLabel(ref), style: TextStyle(color: Theme.of(ctx).colorScheme.secondary)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.copy_rounded),
-            title: const Text('نسخ الآية'),
-            onTap: () {
-              Navigator.pop(ctx);
-              copyText(context, '﴿$text﴾ [${d.refLabel(ref)}]');
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.share_rounded),
-            title: const Text('مشاركة'),
-            onTap: () {
-              Navigator.pop(ctx);
-              shareText(context, '﴿$text﴾ [${d.refLabel(ref)}]');
-            },
-          ),
-          ListenableBuilder(
-            listenable: AppState.I,
-            builder: (c2, _) {
-              final f = AppState.I.isFav('v:${ref.key}');
-              return ListTile(
-                leading: Icon(f ? Icons.star_rounded : Icons.star_border_rounded),
-                title: Text(f ? 'إزالة من المفضلة' : 'إضافة إلى المفضلة'),
-                onTap: () => AppState.I.toggleFav('v:${ref.key}'),
-              );
-            },
-          ),
-          if (usage.isNotEmpty) ...[
-            SectionHeader('استُعملت هذه الآية في (${arNum(usage.length)})', icon: Icons.link_rounded),
-            for (final t in usage) tileFor(t),
-          ],
-        ]),
+        initialChildSize: (AppData.I.verseUsage[ref.key] ?? const []).isEmpty ? 0.38 : 0.62,
+        builder: (ctx, sc) => ListView(controller: sc, children: [_VersePanel(ref: ref, host: context)]),
       ),
     );
   }
@@ -161,86 +147,237 @@ class SurahReader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = AppData.I;
-    final s = d.surah(surah);
-    final start = (ayah - 1).clamp(0, s.ayat.length - 1).toInt();
-    final c = Theme.of(context).colorScheme;
+    final night = AppState.I.mushafNight;
+    final bg = night ? const Color(0xFF0A1712) : C.cream;
+    final page = night ? const Color(0xFF0E1F18) : const Color(0xFFFFFDF7);
+    final ink = night ? const Color(0xFFECE5D1) : C.ink;
+    final gold = night ? const Color(0xFFA88A2A) : C.gold;
+    final start = ((widget.ayah - 1) ~/ chunk);
+    final chunks = (s.uth.length + chunk - 1) ~/ chunk;
+    final wide = MediaQuery.of(context).size.width >= 1100;
     const centerKey = ValueKey('center');
-    final hasBasmala = surah != 1 && surah != 9;
+    final hasBasmala = widget.surah != 1 && widget.surah != 9;
 
-    Widget verse(int i) {
-      final highlight = ayah > 1 && i == start;
-      final ref = VerseRef(surah, i + 1);
-      final used = d.verseUsage.containsKey(ref.key);
-      return InkWell(
-        onTap: () => _menu(context, ref),
-        child: Container(
-          color: highlight ? c.secondaryContainer : null,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: s.ayat[i]),
-              TextSpan(
-                  text: ' ﴿${arNum(i + 1)}﴾',
-                  style: TextStyle(color: used ? C.gold : c.secondary, fontWeight: FontWeight.bold)),
-              if (used) const TextSpan(text: ' •', style: TextStyle(color: C.gold)),
-            ]),
-            style: quranStyle,
-            textAlign: TextAlign.justify,
-          ),
+    Widget block(int c) {
+      final from = c * chunk, to = (from + chunk).clamp(0, s.uth.length).toInt();
+      final spans = <InlineSpan>[];
+      for (var i = from; i < to; i++) {
+        final n = i + 1;
+        final sel = selected == n;
+        final used = d.verseUsage.containsKey('${widget.surah}:$n');
+        spans.add(TextSpan(
+          text: '${s.uth[i]} ',
+          recognizer: taps[i],
+          style: sel
+              ? TextStyle(backgroundColor: (night ? C.gold : C.gold).withAlpha(night ? 55 : 45))
+              : null,
+        ));
+        spans.add(TextSpan(
+          text: '۝${arNum(n)} ',
+          recognizer: taps[i],
+          style: TextStyle(color: used ? (night ? C.goldLight : C.goldDeep) : gold),
+        ));
+      }
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 34),
+        child: Text.rich(
+          TextSpan(children: spans),
+          textAlign: TextAlign.justify,
+          style: quranStyle.copyWith(color: ink, fontSize: 27, height: 2.25),
         ),
       );
     }
 
     final header = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [C.greenDark, C.green]),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Column(children: [
-          Text('سورة ${s.name}',
-              style: const TextStyle(fontFamily: 'Amiri', color: C.goldLight, fontSize: 28, fontWeight: FontWeight.w700)),
-          Text('${s.meccan ? 'مكية' : 'مدنية'} • ${arNum(s.ayat.length)} آية', style: const TextStyle(color: Colors.white70)),
-          if (hasBasmala) ...[
-            const SizedBox(height: 8),
-            const Text('بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
-                style: TextStyle(fontFamily: 'Amiri', color: Colors.white, fontSize: 24)),
-          ],
+      padding: const EdgeInsets.fromLTRB(26, 26, 26, 10),
+      child: Column(children: [
+        Row(children: [
+          Expanded(child: Container(height: 1, color: gold)),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 8),
+            decoration: BoxDecoration(
+              color: night ? const Color(0xFF132A21) : C.goldPale,
+              borderRadius: BorderRadius.circular(40),
+              border: Border.all(color: gold),
+            ),
+            child: Column(children: [
+              Text('سورة ${s.name}',
+                  style: TextStyle(fontFamily: 'Amiri', fontSize: 28, fontWeight: FontWeight.w700, color: night ? C.goldLight : C.goldDeep)),
+              Text('${s.meccan ? 'مكية' : 'مدنية'} • ${arNum(s.uth.length)} آية',
+                  style: TextStyle(fontSize: 12, color: night ? const Color(0xFF9FB3AA) : C.muted)),
+            ]),
+          ),
+          Expanded(child: Container(height: 1, color: gold)),
         ]),
+        if (hasBasmala)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Text('بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ',
+                style: quranStyle.copyWith(fontSize: 27, color: night ? const Color(0xFFF3E7C1) : C.green)),
+          ),
+      ]),
+    );
+
+    final mushaf = CustomScrollView(
+      center: centerKey,
+      slivers: [
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, k) => k < start ? block(start - 1 - k) : header,
+            childCount: start == 0 ? 0 : start + 1,
+          ),
+        ),
+        SliverList(
+          key: centerKey,
+          delegate: SliverChildBuilderDelegate(
+            (context, k) => start == 0 ? (k == 0 ? header : block(k - 1)) : block(start + k),
+            childCount: chunks - start + (start == 0 ? 1 : 0),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(26, 16, 26, 26),
+            child: Row(children: [
+              Text('رواية حفص — Tanzil', style: TextStyle(fontSize: 12, color: night ? const Color(0xFF6E8279) : C.muted)),
+              const Spacer(),
+              if (widget.surah < 114)
+                TextButton.icon(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  label: Text('سورة ${d.surah(widget.surah + 1).name}'),
+                  onPressed: () => Navigator.pushReplacement(
+                      context, MaterialPageRoute(builder: (_) => SurahReader(surah: widget.surah + 1))),
+                ),
+            ]),
+          ),
+        ),
+      ],
+    );
+
+    final framed = Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860),
+        child: Container(
+          margin: EdgeInsets.all(wide ? 22 : 8),
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: page,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: gold, width: 2),
+            boxShadow: [BoxShadow(color: Colors.black.withAlpha(night ? 110 : 30), blurRadius: 30, offset: const Offset(0, 14))],
+          ),
+          child: Container(
+            decoration: BoxDecoration(border: Border.all(color: gold.withAlpha(140))),
+            child: Stack(children: [
+              Positioned.fill(child: StarPattern(opacity: night ? 0.05 : 0.06, color: night ? C.goldLight : C.gold, cell: 72)),
+              mushaf,
+            ]),
+          ),
+        ),
       ),
     );
 
-    return Scaffold(
-      appBar: AppBar(title: Text('سورة ${s.name}'), actions: [
-        if (start > 0)
-          IconButton(
-            tooltip: 'من بداية السورة',
-            icon: const Icon(Icons.vertical_align_top_rounded),
-            onPressed: () =>
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => SurahReader(surah: surah))),
+    return Theme(
+      data: buildTheme(night ? Brightness.dark : Brightness.light),
+      child: Scaffold(
+        backgroundColor: bg,
+        appBar: AppBar(
+          backgroundColor: bg,
+          title: Text('سورة ${s.name}'),
+          actions: [
+            IconButton(
+              tooltip: night ? 'الوضع النهاري' : 'الوضع الليلي',
+              icon: Icon(night ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
+              onPressed: () => setState(AppState.I.toggleMushafNight),
+            ),
+            if (widget.ayah > 1)
+              IconButton(
+                tooltip: 'من بداية السورة',
+                icon: const Icon(Icons.vertical_align_top_rounded),
+                onPressed: () =>
+                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => SurahReader(surah: widget.surah))),
+              ),
+          ],
+        ),
+        body: wide
+            ? Row(children: [
+                Expanded(child: framed),
+                SizedBox(
+                  width: 360,
+                  child: selected == null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text('اضغط على أي آية لترى أين استُعملت ولنسخها أو مشاركتها.',
+                                textAlign: TextAlign.center, style: TextStyle(color: night ? const Color(0xFF9FB3AA) : C.muted)),
+                          ),
+                        )
+                      : ListView(children: [_VersePanel(ref: VerseRef(widget.surah, selected!), host: context)]),
+                ),
+              ])
+            : framed,
+      ),
+    );
+  }
+}
+
+class _VersePanel extends StatelessWidget {
+  final VerseRef ref;
+  final BuildContext host;
+  const _VersePanel({required this.ref, required this.host});
+  @override
+  Widget build(BuildContext context) {
+    final d = AppData.I;
+    final text = d.verseText(ref);
+    final label = d.refLabel(ref);
+    final usage = d.verseUsage[ref.key] ?? const [];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        AppCard(
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('الآية المحددة — $label', style: const TextStyle(fontWeight: FontWeight.w800, color: C.gold, fontSize: 13)),
+            const SizedBox(height: 8),
+            Text('﴿ $text ﴾', style: quranStyle.copyWith(fontSize: 20)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('نسخ'),
+                  onPressed: () => copyText(host, '﴿$text﴾ [$label]')),
+              OutlinedButton.icon(
+                  icon: const Icon(Icons.share_rounded, size: 18),
+                  label: const Text('مشاركة'),
+                  onPressed: () => shareText(host, '﴿$text﴾ [$label]')),
+              ListenableBuilder(
+                listenable: AppState.I,
+                builder: (c2, _) {
+                  final f = AppState.I.isFav('v:${ref.key}');
+                  return OutlinedButton.icon(
+                    icon: Icon(f ? Icons.star_rounded : Icons.star_border_rounded, size: 18),
+                    label: Text(f ? 'في المفضلة' : 'مفضلة'),
+                    onPressed: () => AppState.I.toggleFav('v:${ref.key}'),
+                  );
+                },
+              ),
+              FilledButton.icon(
+                icon: const Icon(Icons.image_rounded, size: 18),
+                label: const Text('بطاقة صورة'),
+                onPressed: () => showShareImage(host, kind: 'آية', title: label, blocks: [ShareBlock('', '﴿$text﴾', quran: true)]),
+              ),
+            ]),
+          ]),
+        ),
+        if (usage.isNotEmpty) ...[
+          SectionHeader('استُعملت هذه الآية في (${arNum(usage.length)})', icon: Icons.link_rounded),
+          for (final t in usage) tileFor(t),
+        ] else
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text('لم تُستعمل هذه الآية بعد في الردود أو التناقضات.'),
           ),
       ]),
-      body: CustomScrollView(
-        center: centerKey,
-        slivers: [
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, k) => k < start ? verse(start - 1 - k) : header,
-              childCount: start == 0 ? 0 : start + 1,
-            ),
-          ),
-          SliverList(
-            key: centerKey,
-            delegate: SliverChildBuilderDelegate(
-              (context, k) => start == 0 ? (k == 0 ? header : verse(k - 1)) : verse(start + k),
-              childCount: s.ayat.length - start + (start == 0 ? 1 : 0),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 40)),
-        ],
-      ),
     );
   }
 }

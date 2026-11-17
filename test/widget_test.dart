@@ -56,6 +56,19 @@ void main() {
       expect(d.contradictionToText(c).isNotEmpty, isTrue);
     }
 
+    expect(d.cases.length, greaterThanOrEqualTo(12));
+    for (final k in d.cases) {
+      for (final v in k.quran) {
+        checkRef(v.ref, k.id);
+      }
+      for (final c in [...k.hh, ...k.hq]) {
+        expect(d.contraById.containsKey(c), isTrue, reason: '${k.id}: $c');
+      }
+      expect(d.caseToText(k).isNotEmpty, isTrue);
+    }
+    expect(d.byNarrator.isNotEmpty, isTrue);
+    expect(d.timeline.length, greaterThanOrEqualTo(10));
+    expect(d.surah(2).uth.length, 286);
     expect(d.parseRefQuery('2:255')?.ayah, 255);
     expect(d.parseRefQuery('البقرة 255')?.surah, 2);
     expect(d.searchQuran('اتخذوا هذا القرآن مهجورا').first.surah, 25);

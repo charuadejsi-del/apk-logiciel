@@ -4,6 +4,8 @@ import '../data.dart';
 import '../state.dart';
 import 'common.dart';
 import 'pages2.dart';
+import 'cases.dart';
+import 'extra.dart';
 
 /// Navigation globale entre sections.
 final ValueNotifier<String> shellNav = ValueNotifier('home');
@@ -12,12 +14,15 @@ final ValueNotifier<String> debateQuery = ValueNotifier('');
 const sectionInfo = <String, (String, IconData)>{
   'home': ('الرئيسية', Icons.home_rounded),
   'debate': ('المناظرة', Icons.bolt_rounded),
+  'cases': ('ملفات القضايا', Icons.folder_special_rounded),
   'objections': ('الردود', Icons.forum_rounded),
   'contra': ('التناقضات', Icons.compare_arrows_rounded),
   'chains': ('سلاسل الحجج', Icons.account_tree_rounded),
   'hadiths': ('الأحاديث', Icons.menu_book_rounded),
   'arguments': ('الحجج', Icons.verified_rounded),
-  'quran': ('القرآن', Icons.auto_stories_rounded),
+  'narrators': ('الرواة', Icons.people_alt_rounded),
+  'timeline': ('الخط الزمني', Icons.timeline_rounded),
+  'quran': ('المصحف', Icons.auto_stories_rounded),
   'books': ('الصحيحان', Icons.library_books_rounded),
   'training': ('التدريب', Icons.school_rounded),
   'favorites': ('المفضلة', Icons.star_rounded),
@@ -28,6 +33,9 @@ const sectionInfo = <String, (String, IconData)>{
 Widget pageFor(String id) => switch (id) {
       'home' => const HomePage(),
       'debate' => const DebatePage(),
+      'cases' => const CasesPage(),
+      'narrators' => const NarratorsPage(),
+      'timeline' => const TimelinePage(),
       'objections' => const ObjectionsPage(),
       'contra' => const ContradictionsPage(),
       'chains' => const ChainsPage(),
@@ -39,11 +47,13 @@ Widget pageFor(String id) => switch (id) {
       'favorites' => const FavoritesPage(),
       'mine' => const MinePage(),
       'settings' => const SettingsPage(),
-      'library' => const HubPage(title: 'المكتبة', ids: ['objections', 'contra', 'chains', 'hadiths', 'arguments']),
-      _ => const HubPage(title: 'المزيد', ids: ['books', 'training', 'favorites', 'mine', 'settings']),
+      _ => const HubPage(title: 'المزيد', ids: [
+          'contra', 'chains', 'hadiths', 'objections', 'arguments', 'narrators', 'timeline', 'books', 'training',
+          'favorites', 'mine', 'settings'
+        ]),
     };
 
-const bottomIds = ['home', 'debate', 'library', 'quran', 'more'];
+const bottomIds = ['home', 'debate', 'cases', 'quran', 'more'];
 
 void openSection(BuildContext context, String id) {
   if (isWide(context) || bottomIds.contains(id)) {
@@ -73,6 +83,8 @@ class HubPage extends StatelessWidget {
           'favorites' => 'ما حفظته للرجوع إليه',
           'mine' => 'أضف حججك وملاحظاتك الخاصة',
           'settings' => 'الخط والمظهر وتحديث المحتوى',
+          'narrators' => 'الصحابة الرواة وتناقضات رواياتهم',
+          'timeline' => 'من نزول القرآن إلى تدوين الحديث',
           _ => '',
         };
     return Scaffold(
@@ -117,130 +129,138 @@ class HomePage extends StatelessWidget {
     final chain = d.chains[day % d.chains.length];
     final contra = d.contradictions[(day * 7) % d.contradictions.length];
     final stats = [
-      ('hadiths', d.hadiths.length, 'حديثاً'),
+      ('hadiths', d.hadiths.length, 'حديث موثّق بالرقم'),
       ('contra', d.contradictions.length, 'تناقضاً'),
-      ('chains', d.chains.length, 'سلسلة'),
-      ('objections', d.objections.length, 'رداً'),
+      ('chains', d.chains.length, 'سلسلة حجج'),
+      ('cases', d.cases.length, 'ملف قضية'),
       ('quran', d.totalAyat, 'آية'),
     ];
-    final quick = ['debate', 'objections', 'contra', 'chains', 'hadiths', 'books', 'training', 'arguments'];
+    final wide = MediaQuery.of(context).size.width >= 900;
     return Scaffold(
-      body: CustomScrollView(slivers: [
-        SliverToBoxAdapter(
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [C.greenDark, C.green, C.greenLight], begin: Alignment.topRight, end: Alignment.bottomLeft),
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
-            ),
-            padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 22, 20, 26),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.asset('assets/brand/icon.png', width: 58, height: 58),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text(Brand.name,
-                        style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800)),
-                    Text(Brand.tagline, style: TextStyle(color: Colors.white.withAlpha(210), fontSize: 14.5)),
-                  ]),
-                ),
-                IconButton(
-                  tooltip: 'الإعدادات',
-                  icon: const Icon(Icons.settings_rounded, color: Colors.white),
-                  onPressed: () => openSection(context, 'settings'),
-                ),
+      body: ListView(padding: EdgeInsets.fromLTRB(wide ? 26 : 12, MediaQuery.of(context).padding.top + 14, wide ? 26 : 12, 30), children: [
+        OrnateBanner(
+          padding: EdgeInsets.all(wide ? 30 : 18),
+          child: Wrap(spacing: 24, runSpacing: 18, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('أداة المناظرة — القرآن وحده',
+                    style: TextStyle(color: C.goldLight, fontWeight: FontWeight.w800, fontSize: 13)),
+                const SizedBox(height: 4),
+                Text(Brand.name,
+                    style: TextStyle(fontFamily: 'Amiri', color: Colors.white, fontWeight: FontWeight.w700, fontSize: wide ? 46 : 34, height: 1.25)),
+                const SizedBox(height: 8),
+                Text('﴿ ${AppData.I.verseTextS('29:51')} ﴾',
+                    style: quranStyle.copyWith(color: const Color(0xFFF3E7C1), fontSize: wide ? 25 : 20)),
+                const Text(Brand.verseRef, style: TextStyle(color: Color(0xFFC9D6CF), fontSize: 12.5)),
               ]),
-              const SizedBox(height: 18),
-              const Text('﴿ ${Brand.verse} ﴾',
-                  style: TextStyle(fontFamily: 'Amiri', color: C.goldLight, fontSize: 20, height: 1.8)),
-              const Text(Brand.verseRef, style: TextStyle(color: Colors.white70, fontSize: 12.5)),
-              const SizedBox(height: 16),
-              Material(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () => openSection(context, 'debate'),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-                    child: Row(children: [
-                      Icon(Icons.bolt_rounded, color: C.green),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text('اكتب اعتراض المحاور… ابحث في كل شيء',
-                            style: TextStyle(color: Colors.black54, fontSize: 15)),
-                      ),
-                      Icon(Icons.search_rounded, color: C.green),
-                    ]),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => wide ? showCommandPalette(context) : openSection(context, 'debate'),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      child: Row(children: [
+                        const Icon(Icons.bolt_rounded, color: C.green),
+                        const SizedBox(width: 10),
+                        const Expanded(child: Text('اكتب اعتراض المحاور…', style: TextStyle(color: C.muted))),
+                        if (wide)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(border: Border.all(color: C.line), borderRadius: BorderRadius.circular(4)),
+                            child: const Text('Ctrl K', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11, color: C.muted)),
+                          ),
+                      ]),
+                    ),
                   ),
                 ),
-              ),
-            ]),
-          ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: C.goldLight,
+                    side: const BorderSide(color: C.gold),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  icon: const Icon(Icons.slideshow_rounded),
+                  label: const Text('وضع العرض للبث المباشر', style: TextStyle(fontWeight: FontWeight.w800)),
+                  onPressed: () => Navigator.push(
+                      context, MaterialPageRoute(builder: (_) => PresentationPage.forChain(chain))),
+                ),
+              ]),
+            ),
+          ]),
         ),
         if (d.fromUpdate)
-          SliverToBoxAdapter(
-            child: AppCard(
-              color: s.secondaryContainer,
-              child: const Row(children: [
-                Icon(Icons.cloud_done_rounded),
-                SizedBox(width: 8),
-                Expanded(child: Text('المحتوى محدّث من الإنترنت')),
-              ]),
-            ),
-          ),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 16, 10, 0),
-            child: Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
-              for (final st in stats)
-                SizedBox(
-                  width: 128,
-                  child: AppCard(
-                    margin: EdgeInsets.zero,
-                    onTap: () => openSection(context, st.$1),
-                    child: Column(children: [
-                      Text(arNum(st.$2),
-                          style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: s.primary)),
-                      Text(st.$3, style: TextStyle(color: s.onSurfaceVariant)),
-                    ]),
-                  ),
-                ),
+          AppCard(
+            margin: const EdgeInsets.only(top: 12),
+            color: s.secondaryContainer,
+            child: const Row(children: [
+              Icon(Icons.cloud_done_rounded),
+              SizedBox(width: 8),
+              Expanded(child: Text('المحتوى محدّث من الإنترنت')),
             ]),
           ),
-        ),
-        const SliverToBoxAdapter(child: SectionHeader('الوصول السريع', icon: Icons.grid_view_rounded)),
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 180, mainAxisExtent: 104, crossAxisSpacing: 4, mainAxisSpacing: 4),
-            delegate: SliverChildBuilderDelegate(
-              (context, i) {
-                final id = quick[i];
-                return AppCard(
-                  margin: const EdgeInsets.all(2),
-                  onTap: () => openSection(context, id),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(sectionInfo[id]!.$2, color: s.primary, size: 30),
-                    const SizedBox(height: 8),
-                    Text(sectionInfo[id]!.$1,
-                        textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 14),
+        LayoutBuilder(builder: (context, c) {
+          final cols = c.maxWidth >= 900 ? 5 : (c.maxWidth >= 520 ? 3 : 2);
+          return Wrap(spacing: 10, runSpacing: 10, children: [
+            for (final st in stats)
+              SizedBox(
+                width: (c.maxWidth - (cols - 1) * 10) / cols,
+                child: AppCard(
+                  margin: EdgeInsets.zero,
+                  onTap: () => openSection(context, st.$1),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(arNum(st.$2), style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: s.primary)),
+                    Text(st.$3, style: TextStyle(color: s.onSurfaceVariant)),
                   ]),
-                );
-              },
-              childCount: quick.length,
-            ),
-          ),
+                ),
+              ),
+          ]);
+        }),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 22, 4, 10),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            const Text('ملفات القضايا', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 10),
+            if (wide)
+              Expanded(
+                child: Text('الدعوى، حكم القرآن، التناقضات، الإلزام، الأسئلة، وردودهم المتوقعة',
+                    style: TextStyle(color: s.onSurfaceVariant, fontSize: 13)),
+              )
+            else
+              const Spacer(),
+            TextButton(onPressed: () => openSection(context, 'cases'), child: const Text('الكل')),
+          ]),
         ),
-        const SliverToBoxAdapter(child: SectionHeader('سلسلة اليوم', icon: Icons.account_tree_rounded)),
-        SliverToBoxAdapter(child: tileFor('s:${chain.id}')),
-        const SliverToBoxAdapter(child: SectionHeader('تناقض اليوم', icon: Icons.compare_arrows_rounded)),
-        SliverToBoxAdapter(child: tileFor('c:${contra.id}')),
-        const SliverToBoxAdapter(child: SizedBox(height: 30)),
+        LayoutBuilder(builder: (context, c) {
+          final cols = c.maxWidth >= 1000 ? 3 : (c.maxWidth >= 640 ? 2 : 1);
+          final list = d.cases.take(cols == 1 ? 3 : 6).toList();
+          return Wrap(spacing: 10, runSpacing: 10, children: [
+            for (final k in list) SizedBox(width: (c.maxWidth - (cols - 1) * 10) / cols, child: CaseCard(k)),
+          ]);
+        }),
+        const SizedBox(height: 18),
+        LayoutBuilder(builder: (context, c) {
+          final two = c.maxWidth >= 800;
+          final a = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SectionHeader('سلسلة اليوم', icon: Icons.account_tree_rounded),
+            tileFor('s:${chain.id}'),
+          ]);
+          final b = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SectionHeader('تناقض اليوم', icon: Icons.compare_arrows_rounded),
+            tileFor('c:${contra.id}'),
+          ]);
+          return two
+              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: a), Expanded(child: b)])
+              : Column(children: [a, b]);
+        }),
       ]),
     );
   }
@@ -363,6 +383,7 @@ class ObjectionsPage extends StatefulWidget {
 }
 
 class _ObjectionsPageState extends State<ObjectionsPage> {
+  String? sel;
   String? topic;
   String q = '';
   final ctrl = TextEditingController();
@@ -382,7 +403,9 @@ class _ObjectionsPageState extends State<ObjectionsPage> {
         .toList();
     return Scaffold(
       appBar: AppBar(title: const Text('الاعتراضات والردود')),
-      body: Column(children: [
+      body: MasterDetail(
+        detail: sel == null ? null : ObjectionDetail(d.objectionById[sel]!, key: ValueKey(sel)),
+        list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في الاعتراضات…', onChanged: (v) => setState(() => q = v)),
         _Chips(
           all: 'الكل (${arNum(d.objections.length)})',
@@ -396,10 +419,13 @@ class _ObjectionsPageState extends State<ObjectionsPage> {
               : ListView.builder(
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
-                  itemBuilder: (context, i) => tileFor('o:${list[i].id}'),
+                  itemBuilder: (context, i) => tileFor('o:${list[i].id}',
+                      selected: sel == list[i].id,
+                      onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
       ]),
+      ),
     );
   }
 }
@@ -475,6 +501,7 @@ class ContradictionsPage extends StatefulWidget {
 }
 
 class _ContradictionsPageState extends State<ContradictionsPage> {
+  String? sel;
   String? kind;
   String q = '';
   final ctrl = TextEditingController();
@@ -495,7 +522,9 @@ class _ContradictionsPageState extends State<ContradictionsPage> {
     final hh = d.contradictions.where((c) => c.hadithVsHadith).length;
     return Scaffold(
       appBar: AppBar(title: const Text('التناقضات')),
-      body: Column(children: [
+      body: MasterDetail(
+        detail: sel == null ? null : ContradictionDetail(d.contraById[sel]!, key: ValueKey(sel)),
+        list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في التناقضات…', onChanged: (v) => setState(() => q = v)),
         _Chips(
           all: 'الكل (${arNum(d.contradictions.length)})',
@@ -509,10 +538,13 @@ class _ContradictionsPageState extends State<ContradictionsPage> {
               : ListView.builder(
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
-                  itemBuilder: (context, i) => tileFor('c:${list[i].id}'),
+                  itemBuilder: (context, i) => tileFor('c:${list[i].id}',
+                      selected: sel == list[i].id,
+                      onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
       ]),
+      ),
     );
   }
 }
@@ -622,6 +654,7 @@ class ChainsPage extends StatefulWidget {
 }
 
 class _ChainsPageState extends State<ChainsPage> {
+  String? sel;
   String q = '';
   final ctrl = TextEditingController();
 
@@ -638,7 +671,9 @@ class _ChainsPageState extends State<ChainsPage> {
     final list = d.chains.where((c) => w.isEmpty || scoreOf(c.kTitle, c.kBody, w) > 0).toList();
     return Scaffold(
       appBar: AppBar(title: const Text('سلاسل الحجج')),
-      body: Column(children: [
+      body: MasterDetail(
+        detail: sel == null ? null : ChainDetail(d.chainById[sel]!, key: ValueKey(sel)),
+        list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في السلاسل…', onChanged: (v) => setState(() => q = v)),
         Expanded(
           child: list.isEmpty
@@ -646,10 +681,13 @@ class _ChainsPageState extends State<ChainsPage> {
               : ListView.builder(
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
-                  itemBuilder: (context, i) => tileFor('s:${list[i].id}'),
+                  itemBuilder: (context, i) => tileFor('s:${list[i].id}',
+                      selected: sel == list[i].id,
+                      onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
       ]),
+      ),
     );
   }
 }
@@ -664,13 +702,16 @@ class ChainDetail extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('سلسلة حجج'),
-        actions: detailActions(context,
+        actions: [
+          presentChainButton(context, c),
+          ...detailActions(context,
             tag: 's:${c.id}',
             text: d.chainToText(c),
             onImage: () => showShareImage(context, kind: 'سلسلة حجج', title: c.title, blocks: [
                   for (var i = 0; i < c.steps.length && i < 5; i++) ShareBlock('${arNum(i + 1)}', c.steps[i].note),
                   ShareBlock('الخلاصة', c.conclusion, color: C.goldLight),
                 ])),
+        ],
       ),
       body: ListView(padding: const EdgeInsets.only(bottom: 30), children: [
         Padding(
@@ -748,6 +789,7 @@ class HadithsPage extends StatefulWidget {
 }
 
 class _HadithsPageState extends State<HadithsPage> {
+  String? sel;
   String? cat;
   String q = '';
   final ctrl = TextEditingController();
@@ -768,7 +810,9 @@ class _HadithsPageState extends State<HadithsPage> {
     int count(String id) => d.hadiths.where((h) => h.cat == id).length;
     return Scaffold(
       appBar: AppBar(title: const Text('مراجع الأحاديث')),
-      body: Column(children: [
+      body: MasterDetail(
+        detail: sel == null ? null : HadithDetail(d.hadithById[sel]!, key: ValueKey(sel)),
+        list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في الأحاديث…', onChanged: (v) => setState(() => q = v)),
         _Chips(
           all: 'الكل (${arNum(d.hadiths.length)})',
@@ -782,10 +826,13 @@ class _HadithsPageState extends State<HadithsPage> {
               : ListView.builder(
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
-                  itemBuilder: (context, i) => tileFor('h:${list[i].id}'),
+                  itemBuilder: (context, i) => tileFor('h:${list[i].id}',
+                      selected: sel == list[i].id,
+                      onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
       ]),
+      ),
     );
   }
 }

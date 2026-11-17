@@ -26,6 +26,7 @@ class AppState extends ChangeNotifier {
   final List<MyArg> myArgs = [];
   int trainKnown = 0, trainUnknown = 0;
   String updateUrl = Brand.defaultUpdateUrl;
+  bool mushafNight = true;
 
   Future<void> load() async {
     try {
@@ -43,6 +44,7 @@ class AppState extends ChangeNotifier {
       trainKnown = p.getInt('trainKnown') ?? 0;
       trainUnknown = p.getInt('trainUnknown') ?? 0;
       updateUrl = p.getString('updateUrl') ?? Brand.defaultUpdateUrl;
+      mushafNight = p.getBool('mushafNight') ?? true;
     } catch (_) {
       // Pas de stockage disponible : on garde les valeurs par défaut.
     }
@@ -59,10 +61,17 @@ class AppState extends ChangeNotifier {
     p.setInt('trainKnown', trainKnown);
     p.setInt('trainUnknown', trainUnknown);
     p.setString('updateUrl', updateUrl);
+    p.setBool('mushafNight', mushafNight);
   }
 
   void setFontScale(double v) {
     fontScale = v;
+    _save();
+    notifyListeners();
+  }
+
+  void toggleMushafNight() {
+    mushafNight = !mushafNight;
     _save();
     notifyListeners();
   }

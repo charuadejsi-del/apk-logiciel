@@ -12,6 +12,7 @@ import '../data.dart';
 import '../state.dart';
 import 'pages.dart';
 import 'pages2.dart';
+import 'cases.dart';
 
 // ───────────────────────── Thème ─────────────────────────
 
@@ -21,7 +22,15 @@ class C {
   static const greenLight = Color(0xFF1F7A5C);
   static const gold = Color(0xFFC9A227);
   static const goldLight = Color(0xFFE9CF7A);
-  static const cream = Color(0xFFF7F4EC);
+  static const cream = Color(0xFFF4EFE2);
+  static const ivoryPane = Color(0xFFEDE7D7);
+  static const line = Color(0xFFE2DBC8);
+  static const ink = Color(0xFF10201B);
+  static const muted = Color(0xFF4A5A54);
+  static const amber = Color(0xFF9C4A00);
+  static const goldDeep = Color(0xFF7A5E0C);
+  static const goldPale = Color(0xFFF6EDCF);
+  static const greenPale = Color(0xFFE7F0EB);
   static const night = Color(0xFF0C1613);
   static const red = Color(0xFFB3261E);
 }
@@ -33,7 +42,8 @@ ThemeData buildTheme(Brightness b) {
     brightness: b,
     primary: dark ? const Color(0xFF7FD1AE) : C.green,
     secondary: dark ? C.goldLight : const Color(0xFF9A7A12),
-    surface: dark ? const Color(0xFF111E1A) : Colors.white,
+    surface: dark ? const Color(0xFF10231B) : Colors.white,
+    outlineVariant: dark ? const Color(0xFF1F3A2F) : C.line,
   );
   return ThemeData(
     useMaterial3: true,
@@ -68,7 +78,7 @@ ThemeData buildTheme(Brightness b) {
   );
 }
 
-const quranStyle = TextStyle(fontFamily: 'Amiri', fontSize: 22, height: 2.0);
+const quranStyle = TextStyle(fontFamily: 'AmiriQuran', fontSize: 22, height: 2.1);
 const hadithStyle = TextStyle(fontFamily: 'Amiri', fontSize: 18, height: 1.9);
 
 String arNum(int n) => n.toString().split('').map((d) => '٠١٢٣٤٥٦٧٨٩'[int.parse(d)]).join();
@@ -123,6 +133,9 @@ void openTag(BuildContext context, String tag) {
     case 'a':
       final a = d.argumentById[id];
       if (a != null) page = ArgumentDetail(a);
+    case 'k':
+      final k = d.caseById[id];
+      if (k != null) page = CaseDetail(k);
     case 'v':
       final r = VerseRef.parse(id);
       page = SurahReader(surah: r.surah, ayah: r.ayah);
@@ -141,6 +154,7 @@ String tagTitle(String tag) {
     's' => d.chainById[id]?.title ?? id,
     'a' => d.argumentById[id]?.title ?? id,
     'v' => d.refLabelS(id),
+    'k' => d.caseById[id]?.title ?? id,
     _ => id,
   };
 }
@@ -152,6 +166,7 @@ const kindInfo = {
   's': ('سلسلة', Icons.account_tree_rounded),
   'a': ('حجة', Icons.verified_rounded),
   'v': ('آية', Icons.auto_stories_rounded),
+  'k': ('قضية', Icons.folder_special_rounded),
 };
 
 // ───────────────────────── Composants ─────────────────────────
@@ -450,7 +465,17 @@ class ItemTile extends StatelessWidget {
   final String? subtitle;
   final List<Widget> pills;
   final String? copy;
-  const ItemTile({super.key, required this.tag, required this.title, this.subtitle, this.pills = const [], this.copy});
+  final VoidCallback? onTap;
+  final bool selected;
+  const ItemTile(
+      {super.key,
+      required this.tag,
+      required this.title,
+      this.subtitle,
+      this.pills = const [],
+      this.copy,
+      this.onTap,
+      this.selected = false});
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
@@ -461,10 +486,13 @@ class ItemTile extends StatelessWidget {
       'c' => const Color(0xFFB26A00),
       's' => s.primary,
       'h' => s.tertiary,
+      'k' => C.goldDeep,
       _ => s.secondary,
     };
     return AppCard(
-      onTap: () => openTag(context, tag),
+      color: selected ? s.primaryContainer : null,
+      border: selected ? s.primary : null,
+      onTap: onTap ?? () => openTag(context, tag),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
           width: 40,
@@ -502,7 +530,7 @@ class ItemTile extends StatelessWidget {
 }
 
 /// Tuile automatique à partir d'une étiquette.
-Widget tileFor(String tag) {
+Widget tileFor(String tag, {VoidCallback? onTap, bool selected = false}) {
   final i = tag.indexOf(':');
   final k = tag.substring(0, i), id = tag.substring(i + 1);
   final d = AppData.I;
@@ -510,6 +538,8 @@ Widget tileFor(String tag) {
     case 'o':
       final o = d.objectionById[id]!;
       return ItemTile(
+          onTap: onTap,
+          selected: selected,
           tag: tag,
           title: o.objection,
           subtitle: o.answer,
@@ -518,6 +548,8 @@ Widget tileFor(String tag) {
     case 'h':
       final h = d.hadithById[id]!;
       return ItemTile(
+          onTap: onTap,
+          selected: selected,
           tag: tag,
           title: h.title,
           subtitle: h.comment,
@@ -526,6 +558,8 @@ Widget tileFor(String tag) {
     case 'c':
       final c = d.contraById[id]!;
       return ItemTile(
+          onTap: onTap,
+          selected: selected,
           tag: tag,
           title: c.title,
           subtitle: c.text,
@@ -534,14 +568,26 @@ Widget tileFor(String tag) {
     case 's':
       final s = d.chainById[id]!;
       return ItemTile(
+          onTap: onTap,
+          selected: selected,
           tag: tag,
           title: s.title,
           subtitle: s.summary.isNotEmpty ? s.summary : s.conclusion,
           pills: [Pill('${arNum(s.steps.length)} خطوات')],
           copy: d.chainToText(s));
+    case 'k':
+      final k = d.caseById[id]!;
+      return ItemTile(
+          onTap: onTap,
+          selected: selected,
+          tag: tag,
+          title: 'ملف القضية: ${k.title}',
+          subtitle: k.desc,
+          pills: [for (final t in k.tags) Pill(t, color: C.goldDeep)],
+          copy: d.caseToText(k));
     case 'a':
       final a = d.argumentById[id]!;
-      return ItemTile(tag: tag, title: a.title, subtitle: a.text, copy: d.argumentToText(a));
+      return ItemTile(onTap: onTap, selected: selected, tag: tag, title: a.title, subtitle: a.text, copy: d.argumentToText(a));
   }
   return const SizedBox.shrink();
 }
@@ -735,3 +781,130 @@ List<ShareBlock> versesBlocks(List<String> refs, {int max = 3}) => refs
     .take(max)
     .map((r) => ShareBlock(AppData.I.refLabelS(r), '﴿${AppData.I.verseTextS(r)}﴾', quran: true))
     .toList();
+
+
+// ───────────────────────── Motif géométrique (étoile à 8 branches) ─────────────────────────
+
+class StarPattern extends StatelessWidget {
+  final Color color;
+  final double cell;
+  final double opacity;
+  const StarPattern({super.key, this.color = C.goldLight, this.cell = 64, this.opacity = 0.12});
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: Opacity(opacity: opacity, child: CustomPaint(painter: _StarPainter(color, cell), size: Size.infinite)),
+      );
+}
+
+class _StarPainter extends CustomPainter {
+  final Color color;
+  final double cell;
+  _StarPainter(this.color, this.cell);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final r = cell * 0.40, k = cell * 0.17;
+    for (double y = 0; y < size.height + cell; y += cell) {
+      for (double x = 0; x < size.width + cell; x += cell) {
+        final cx = x + cell / 2, cy = y + cell / 2;
+        final path = Path()
+          ..moveTo(cx, cy - r)
+          ..lineTo(cx + k, cy - r + k)
+          ..lineTo(cx + r - k, cy - r + k)
+          ..lineTo(cx + r - k, cy - k)
+          ..lineTo(cx + r, cy)
+          ..lineTo(cx + r - k, cy + k)
+          ..lineTo(cx + r - k, cy + r - k)
+          ..lineTo(cx + k, cy + r - k)
+          ..lineTo(cx, cy + r)
+          ..lineTo(cx - k, cy + r - k)
+          ..lineTo(cx - r + k, cy + r - k)
+          ..lineTo(cx - r + k, cy + k)
+          ..lineTo(cx - r, cy)
+          ..lineTo(cx - r + k, cy - k)
+          ..lineTo(cx - r + k, cy - r + k)
+          ..lineTo(cx - k, cy - r + k)
+          ..close();
+        canvas.drawPath(path, p);
+        canvas.drawCircle(Offset(cx, cy), cell * 0.09, p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StarPainter old) => old.color != color || old.cell != cell;
+}
+
+/// Bandeau vert à motif (en-têtes).
+class OrnateBanner extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final BorderRadius radius;
+  const OrnateBanner(
+      {super.key,
+      required this.child,
+      this.padding = const EdgeInsets.all(22),
+      this.radius = const BorderRadius.all(Radius.circular(16))});
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+        borderRadius: radius,
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+                colors: [C.greenDark, C.green], begin: Alignment.topRight, end: Alignment.bottomLeft),
+          ),
+          child: Stack(children: [
+            const Positioned.fill(child: StarPattern()),
+            Padding(padding: padding, child: child),
+          ]),
+        ),
+      );
+}
+
+/// Numéro de section en pastille.
+class StepBadge extends StatelessWidget {
+  final String n;
+  final Color color;
+  final Color fg;
+  const StepBadge(this.n, {super.key, this.color = C.green, this.fg = Colors.white});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 30,
+        height: 30,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        child: Text(n, style: TextStyle(color: fg, fontWeight: FontWeight.w800, fontSize: 14)),
+      );
+}
+
+/// Liste + détail côte à côte sur grand écran.
+class MasterDetail extends StatelessWidget {
+  final Widget list;
+  final Widget? detail;
+  final String emptyText;
+  const MasterDetail({super.key, required this.list, required this.detail, this.emptyText = 'اختر عنصراً من القائمة'});
+  @override
+  Widget build(BuildContext context) {
+    final w = MediaQuery.of(context).size.width;
+    if (w < 1150) return list;
+    return Row(children: [
+      SizedBox(width: 460, child: list),
+      const VerticalDivider(width: 1),
+      Expanded(
+        child: detail ??
+            Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.touch_app_rounded, size: 48, color: Theme.of(context).colorScheme.outline),
+                const SizedBox(height: 10),
+                Text(emptyText),
+              ]),
+            ),
+      ),
+    ]);
+  }
+}
+
+bool splitView(BuildContext context) => MediaQuery.of(context).size.width >= 1150;

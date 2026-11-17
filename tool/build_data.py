@@ -61,6 +61,37 @@ for (sid,title,summ,steps,concl) in C.CHAINS:
         for x in (refs or []): chk(x,sid)
         st.append(dict(type=t,refs=refs or [],note=note))
     chains.append(dict(id=sid,title=title,summary=summ,steps=st,conclusion=concl))
+cases=[]
+cids={c['id'] for c in contra}; sids={c['id'] for c in chains}; oids={o[0] for o in C.OBJECTIONS}
+for (kid,title,desc,tags,claim,qv,hh,hq,ilzam,qs,replies,ch,obj) in C.CASES:
+    for r,_ in qv:
+        if not vok(r): errs.append(f'{kid}: verset {r}')
+    for x in hh+hq:
+        if x not in cids: errs.append(f'{kid}: contradiction {x}')
+    for x in ch:
+        if x not in sids: errs.append(f'{kid}: chaîne {x}')
+    for x in obj:
+        if x not in oids: errs.append(f'{kid}: objection {x}')
+    cases.append(dict(id=kid,title=title,desc=desc,tags=tags,claim=claim,quran=[dict(ref=r,note=n) for r,n in qv],
+                      hh=hh,hq=hq,either=ilzam[0],orr=ilzam[1],questions=qs,replies=[dict(q=q,a=a) for q,a in replies],chains=ch,objections=obj))
+# rapporteurs : le Compagnon nommé le plus près du texte, dans la chaîne seulement
+def narrator(text):
+    t=norm(text)
+    cut=len(t)
+    for m in ['قال رسول الله','سمعت رسول الله','عن النبي','ان النبي','ان رسول الله','"','قالت']:
+        i=t.find(m)
+        if 0<i<cut: cut=i
+    mm=re.search(r' قال(?! ?(حدثن|اخبرن|انبان|سمعت|قال|لي|لنا))',t)
+    if mm and mm.start()<cut: cut=mm.start()
+    pre=t[:cut]
+    best=None
+    for name,pats in C.NARRATORS:
+        for pt in pats:
+            i=pre.find(pt)
+            if i>=0 and (best is None or i<best[0]): best=(i,name)
+    return best[1] if best else ''
+for h in hadiths:
+    h['narrator']=narrator(h['text'])
 if errs:
     print('\n'.join(errs)); sys.exit(1)
 content=dict(version=2,
@@ -68,6 +99,7 @@ content=dict(version=2,
   objections=[dict(id=i,topic=t,objection=o,answer=a,refs=r) for i,t,o,a,r in C.OBJECTIONS],
   arguments=[dict(id=i,title=t,text=x,refs=r) for i,t,x,r in C.ARGUMENTS],
   hadithCategories=[dict(id=i,title=t) for i,t in C.HCATS],
-  hadiths=hadiths, contradictions=contra, chains=chains)
+  hadiths=hadiths, contradictions=contra, chains=chains, cases=cases,
+  timeline=[dict(h=a,g=b2,title=t,text=x) for a,b2,t,x in C.TIMELINE])
 json.dump(content,open(f'{OUT}/content.json','w'),ensure_ascii=False,indent=0)
 print('OK', {k:len(v) for k,v in content.items() if isinstance(v,list)})

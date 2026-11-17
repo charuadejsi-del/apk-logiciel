@@ -56,9 +56,10 @@ class Surah {
   final int n;
   final String name;
   final bool meccan;
-  final List<String> ayat;
+  final List<String> ayat; // texte simple (copie, compatibilité)
+  final List<String> uth; // rasm uthmani (affichage)
   final List<String> search;
-  Surah(this.n, this.name, this.meccan, this.ayat, this.search);
+  Surah(this.n, this.name, this.meccan, this.ayat, this.uth, this.search);
 }
 
 class Topic {
@@ -90,11 +91,11 @@ class HCategory {
 }
 
 class Hadith {
-  final String id, cat, title, book, bookKey, number, grade, text, comment, note, url, kw;
+  final String id, cat, title, book, bookKey, number, grade, text, comment, note, url, kw, narrator;
   final List<String> refs;
   final String kTitle, kBody;
   Hadith(this.id, this.cat, this.title, this.book, this.bookKey, this.number, this.grade, this.text,
-      this.comment, this.note, this.url, this.kw, this.refs)
+      this.comment, this.note, this.url, this.kw, this.refs, this.narrator)
       : kTitle = norm(title),
         kBody = norm('$text $comment $book');
   String get reference => '$book — رقم $number';
@@ -127,6 +128,33 @@ class Chain {
         kBody = norm('$summary $conclusion ${steps.map((s) => s.note).join(' ')}');
 }
 
+class CaseVerse {
+  final String ref, note;
+  CaseVerse(this.ref, this.note);
+}
+
+class CaseReply {
+  final String q, a;
+  CaseReply(this.q, this.a);
+}
+
+class CaseFile {
+  final String id, title, desc, claim, either, orr;
+  final List<String> tags, hh, hq, questions, chains, objections;
+  final List<CaseVerse> quran;
+  final List<CaseReply> replies;
+  final String kTitle, kBody;
+  CaseFile(this.id, this.title, this.desc, this.tags, this.claim, this.quran, this.hh, this.hq, this.either, this.orr,
+      this.questions, this.replies, this.chains, this.objections)
+      : kTitle = norm(title),
+        kBody = norm('$desc $claim $either $orr ${questions.join(' ')} ${replies.map((r) => '${r.q} ${r.a}').join(' ')}');
+}
+
+class TimelineEvent {
+  final String h, g, title, text;
+  TimelineEvent(this.h, this.g, this.title, this.text);
+}
+
 /// Élément trouvé par la recherche globale.
 class Hit {
   final String kind; // o, h, c, s, a
@@ -148,6 +176,8 @@ class AppData {
   final List<Hadith> hadiths;
   final List<Contradiction> contradictions;
   final List<Chain> chains;
+  final List<CaseFile> cases;
+  final List<TimelineEvent> timeline;
   final bool fromUpdate;
 
   late final Map<String, Hadith> hadithById = {for (final h in hadiths) h.id: h};
@@ -155,6 +185,35 @@ class AppData {
   late final Map<String, Contradiction> contraById = {for (final c in contradictions) c.id: c};
   late final Map<String, Chain> chainById = {for (final c in chains) c.id: c};
   late final Map<String, Argument> argumentById = {for (final a in arguments) a.id: a};
+  late final Map<String, CaseFile> caseById = {for (final c in cases) c.id: c};
+
+  /// Rapporteurs : nom -> hadiths.
+  late final Map<String, List<Hadith>> byNarrator = () {
+    final m = <String, List<Hadith>>{};
+    for (final h in hadiths) {
+      if (h.narrator.isNotEmpty) (m[h.narrator] ??= []).add(h);
+    }
+    final keys = m.keys.toList()..sort((a, b) => m[b]!.length.compareTo(m[a]!.length));
+    return {for (final k in keys) k: m[k]!};
+  }();
+
+  /// Hadiths cités dans un dossier (via ses contradictions et chaînes).
+  List<Hadith> caseHadiths(CaseFile k) {
+    final ids = <String>{};
+    for (final cid in [...k.hh, ...k.hq]) {
+      final c = contraById[cid];
+      if (c != null) ids.addAll([...c.a, ...c.b].where((x) => !isVerseRef(x)));
+    }
+    for (final sid in k.chains) {
+      final s = chainById[sid];
+      if (s != null) {
+        for (final st in s.steps) {
+          ids.addAll(st.refs.where((x) => !isVerseRef(x)));
+        }
+      }
+    }
+    return ids.map((i) => hadithById[i]).whereType<Hadith>().toList();
+  }
 
   /// Pour chaque hadith : contradictions et chaînes où il apparaît.
   late final Map<String, List<String>> hadithUsage = _buildHadithUsage();
@@ -163,7 +222,7 @@ class AppData {
   late final Map<String, List<String>> verseUsage = _buildVerseUsage();
 
   AppData(this.surahs, this.topics, this.objections, this.arguments, this.hcats, this.hadiths,
-      this.contradictions, this.chains, this.fromUpdate);
+      this.contradictions, this.chains, this.cases, this.timeline, this.fromUpdate);
 
   Map<String, List<String>> _buildHadithUsage() {
     final m = <String, List<String>>{};
@@ -279,6 +338,7 @@ class AppData {
                 s['name'] as String,
                 s['type'] == 'meccan',
                 List<String>.from(s['ayat'] as List),
+                List<String>.from((s['u'] ?? s['ayat']) as List),
                 (s['clean'] as List).map((e) => norm(e as String)).toList(),
               ))
           .toList(),
@@ -303,6 +363,7 @@ class AppData {
                 h['url'] ?? '',
                 h['kw'] ?? h['title'],
                 _sl(h['refs']),
+                h['narrator'] ?? '',
               ))
           .toList(),
       (c['contradictions'] as List)
@@ -317,13 +378,34 @@ class AppData {
                 x['conclusion'] ?? '',
               ))
           .toList(),
+      ((c['cases'] ?? const []) as List)
+          .map((k) => CaseFile(
+                k['id'],
+                k['title'],
+                k['desc'] ?? '',
+                _sl(k['tags']),
+                k['claim'] ?? '',
+                ((k['quran'] ?? const []) as List).map((v) => CaseVerse(v['ref'], v['note'] ?? '')).toList(),
+                _sl(k['hh']),
+                _sl(k['hq']),
+                k['either'] ?? '',
+                k['orr'] ?? '',
+                _sl(k['questions']),
+                ((k['replies'] ?? const []) as List).map((r) => CaseReply(r['q'], r['a'])).toList(),
+                _sl(k['chains']),
+                _sl(k['objections']),
+              ))
+          .toList(),
+      ((c['timeline'] ?? const []) as List)
+          .map((e) => TimelineEvent(e['h'] ?? '', e['g'] ?? '', e['title'] ?? '', e['text'] ?? ''))
+          .toList(),
       fromUpdate,
     );
   }
 
   // ─── Coran
   Surah surah(int n) => surahs[n - 1];
-  String verseText(VerseRef r) => surahs[r.surah - 1].ayat[r.ayah - 1];
+  String verseText(VerseRef r) => surahs[r.surah - 1].uth[r.ayah - 1];
   String verseTextS(String r) => verseText(VerseRef.parse(r));
   String refLabel(VerseRef r) => '${surahs[r.surah - 1].name}: ${r.ayah}';
   String refLabelS(String r) => refLabel(VerseRef.parse(r));
@@ -374,6 +456,10 @@ class AppData {
     final w = queryWords(q);
     if (w.isEmpty) return [];
     final hits = <Hit>[];
+    for (final k in cases) {
+      final s = scoreOf(k.kTitle, k.kBody, w);
+      if (s > 0) hits.add(Hit('k', k.id, s + 3));
+    }
     for (final o in objections) {
       final s = scoreOf(o.kTitle, o.kBody, w);
       if (s > 0) hits.add(Hit('o', o.id, s + 2));
@@ -447,6 +533,36 @@ class AppData {
       }
     }
     b..writeln()..writeln('⬅ الخلاصة: ${s.conclusion}')..writeln()..write('— ${Brand.name}');
+    return b.toString();
+  }
+}
+
+extension CaseText on AppData {
+  String caseToText(CaseFile k) {
+    final b = StringBuffer()
+      ..writeln('📁 ملف القضية: ${k.title}')
+      ..writeln()
+      ..writeln('١. الدعوى: ${k.claim}')
+      ..writeln()
+      ..writeln('٢. حكم القرآن:');
+    for (final v in k.quran) {
+      b.writeln('﴿${verseTextS(v.ref)}﴾ [${refLabelS(v.ref)}] — ${v.note}');
+    }
+    b
+      ..writeln()
+      ..writeln('٥. الإلزام:')
+      ..writeln('إمّا ${k.either}')
+      ..writeln('وإمّا ${k.orr}')
+      ..writeln()
+      ..writeln('٦. أسئلة للمحاور:');
+    for (final q in k.questions) {
+      b.writeln('• $q');
+    }
+    b..writeln()..writeln('٧. ردودهم وجوابها:');
+    for (final r in k.replies) {
+      b.writeln('— يقولون: ${r.q}\n  الجواب: ${r.a}');
+    }
+    b..writeln()..write('— ${Brand.name}');
     return b.toString();
   }
 }
