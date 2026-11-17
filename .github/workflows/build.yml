@@ -27,6 +27,10 @@ jobs:
           sed -i 's/android:label="munazir"/android:label="حسبنا كتاب الله"/' android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml || \
             sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          # Le lint Android plante sur certains plugins (bug connu) : on le désactive pour la release.
+          if [ -f android/build.gradle.kts ]; then F=android/build.gradle.kts; else F=android/build.gradle; fi
+          printf '\nsubprojects {\n    tasks.matching { it.name.contains("lintVital") }.configureEach { enabled = false }\n}\n' >> $F
+          tail -5 $F
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
