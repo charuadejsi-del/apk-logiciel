@@ -39,6 +39,8 @@ for (hid,cat,title,b,num,kw,refs,com) in C.H:
         if not h:
             alt=find(b,kw,6); errs.append(f"{hid} {b}:{num} «{kw}» introuvable -> candidats {[x['num'] for x in alt]}"); continue
         text=re.sub(r'[‏‎]','',h['text']).strip(); bk=BN[b]; g=grade(b,h); note=''
+        if b not in('bukhari','muslim') and (not g or any(w in g for w in('ضعيف','موضوع','منكر','شاذ'))):
+            errs.append(f'{hid}: grade non retenu ({g or "sans grade"})')
         url=f'https://sunnah.com/{b}:{num}'
     hadiths.append(dict(id=hid,cat=cat,title=title,book=bk,bookKey=b,number=str(num),grade=g,text=text,refs=refs,comment=com,note=note,url=url,kw=kw or 'فأعضوه'))
 hid_set={h['id'] for h in hadiths}

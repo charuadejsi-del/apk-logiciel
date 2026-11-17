@@ -150,6 +150,17 @@ class CaseFile {
         kBody = norm('$desc $claim $either $orr ${questions.join(' ')} ${replies.map((r) => '${r.q} ${r.a}').join(' ')}');
 }
 
+/// Lien typé d'un hadith vers un verset, un hadith, une chaîne, un dossier ou un rapporteur.
+class HLink {
+  final String type; // q, hq, hh, same, s, k, n
+  final String title, why;
+  final List<String> items;
+  final String? open;
+  final Chain? chain;
+  final int step;
+  HLink(this.type, this.title, this.why, this.items, {this.open, this.chain, this.step = 0});
+}
+
 class TimelineEvent {
   final String h, g, title, text;
   TimelineEvent(this.h, this.g, this.title, this.text);
@@ -213,6 +224,40 @@ class AppData {
       }
     }
     return ids.map((i) => hadithById[i]).whereType<Hadith>().toList();
+  }
+
+  /// Carte de liaison d'un hadith : chaque lien avec son type et son explication.
+  List<HLink> hadithLinks(Hadith h) {
+    final out = <HLink>[];
+    final own = h.refs.where(isVerseRef).toList();
+    if (own.isNotEmpty) out.add(HLink('q', 'يخالف كلام الله', h.comment, own));
+    for (final c in contradictions) {
+      final inA = c.a.contains(h.id), inB = c.b.contains(h.id);
+      if (!inA && !inB) continue;
+      final other = inA ? c.b : c.a;
+      final mates = (inA ? c.a : c.b).where((x) => x != h.id && !isVerseRef(x)).toList();
+      final verses = other.where(isVerseRef).toList();
+      final hads = other.where((x) => !isVerseRef(x)).toList();
+      if (verses.isNotEmpty) out.add(HLink('hq', c.title, c.text, verses, open: 'c:${c.id}'));
+      if (hads.isNotEmpty) out.add(HLink('hh', c.title, c.text, hads, open: 'c:${c.id}'));
+      if (mates.isNotEmpty) out.add(HLink('same', 'في صفّه: ${c.title}', 'روايات تقول المعنى نفسه في هذا التناقض.', mates, open: 'c:${c.id}'));
+    }
+    for (final ch in chains) {
+      final i = ch.steps.indexWhere((st) => st.refs.contains(h.id));
+      if (i < 0) continue;
+      out.add(HLink('s', ch.title, ch.steps[i].note, const [], open: 's:${ch.id}', chain: ch, step: i));
+    }
+    for (final k in cases) {
+      if (caseHadiths(k).any((x) => x.id == h.id)) out.add(HLink('k', k.title, k.desc, const [], open: 'k:${k.id}'));
+    }
+    if (h.narrator.isNotEmpty) {
+      final others = (byNarrator[h.narrator] ?? const <Hadith>[]).where((x) => x.id != h.id).map((x) => x.id).toList();
+      if (others.isNotEmpty) {
+        out.add(HLink('n', 'روايات أخرى لـ${h.narrator}', 'الراوي نفسه في بقية الملف: قارن ما يرويه هنا بما يرويه هناك.',
+            others.take(8).toList()));
+      }
+    }
+    return out;
   }
 
   /// Pour chaque hadith : contradictions et chaînes où il apparaît.

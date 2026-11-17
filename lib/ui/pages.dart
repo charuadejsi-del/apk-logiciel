@@ -6,6 +6,7 @@ import 'common.dart';
 import 'pages2.dart';
 import 'cases.dart';
 import 'extra.dart';
+import 'links.dart';
 
 /// Navigation globale entre sections.
 final ValueNotifier<String> shellNav = ValueNotifier('home');
@@ -853,7 +854,6 @@ class HadithDetail extends StatelessWidget {
   Widget build(BuildContext context) {
     final d = AppData.I;
     final s = Theme.of(context).colorScheme;
-    final usage = d.hadithUsage[h.id] ?? const [];
     final text = h.text.length > 700 ? '${h.text.substring(0, 700)}…' : h.text;
     return Scaffold(
       appBar: AppBar(
@@ -883,14 +883,7 @@ class HadithDetail extends StatelessWidget {
         ColoredBlock(label: 'نص الرواية', text: h.text, color: s.tertiary, icon: Icons.format_quote_rounded, style: hadithStyle),
         if (h.note.isNotEmpty) ColoredBlock(label: 'التخريج', text: h.note, color: s.outline, icon: Icons.info_outline_rounded),
         ColoredBlock(label: 'وجه الاعتراض', text: h.comment, color: s.error, icon: Icons.report_rounded),
-        if (h.refs.isNotEmpty) ...[
-          const SectionHeader('ما يقوله القرآن', icon: Icons.auto_stories_rounded),
-          for (final r in h.refs.where(isVerseRef)) VerseCard(r),
-        ],
-        if (usage.isNotEmpty) ...[
-          const SectionHeader('ورد في', icon: Icons.link_rounded),
-          for (final t in usage) tileFor(t),
-        ],
+        HadithLinkMap(h),
         const SectionHeader('التحقق من المصدر', icon: Icons.fact_check_rounded),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),

@@ -56,7 +56,15 @@ void main() {
       expect(d.contradictionToText(c).isNotEmpty, isTrue);
     }
 
-    expect(d.cases.length, greaterThanOrEqualTo(12));
+    expect(d.cases.length, greaterThanOrEqualTo(16));
+    expect(d.hadiths.length, greaterThanOrEqualTo(320));
+    for (final h in d.hadiths) {
+      for (final l in d.hadithLinks(h)) {
+        for (final it in l.items) {
+          expect(isVerseRef(it) || d.hadithById.containsKey(it), isTrue, reason: '${h.id} -> $it');
+        }
+      }
+    }
     for (final k in d.cases) {
       for (final v in k.quran) {
         checkRef(v.ref, k.id);
