@@ -23,17 +23,20 @@ jobs:
           cache: true
       - name: Generate platform folders
         run: |
-          flutter create --platforms=android,windows --org com.munazir --project-name munazir .
-          sed -i 's/android:label="munazir"/android:label="مُناظِر"/' android/app/src/main/AndroidManifest.xml
+          flutter create --platforms=android,windows --org com.hasbuna --project-name munazir .
+          sed -i 's/android:label="munazir"/android:label="حسبنا كتاب الله"/' android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml || \
+            sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - run: flutter test
       - run: flutter build apk --release
-      - run: cp build/app/outputs/flutter-apk/app-release.apk munazir-android.apk
+      - run: cp build/app/outputs/flutter-apk/app-release.apk hasbuna-android.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: munazir-android
-          path: munazir-android.apk
+          name: hasbuna-android
+          path: hasbuna-android.apk
 
   windows:
     runs-on: windows-latest
@@ -44,19 +47,20 @@ jobs:
           channel: stable
           cache: true
       - name: Generate platform folders
-        run: flutter create --platforms=android,windows --org com.munazir --project-name munazir .
+        run: flutter create --platforms=android,windows --org com.hasbuna --project-name munazir .
       - name: Window title
         shell: pwsh
-        run: (Get-Content windows/runner/main.cpp) -replace 'L"munazir"', 'L"Munazir"' | Set-Content windows/runner/main.cpp
+        run: (Get-Content windows/runner/main.cpp) -replace 'L"munazir"', 'L"Hasbuna Kitab Allah"' | Set-Content windows/runner/main.cpp
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: flutter build windows --release
       - name: Zip
         shell: pwsh
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath munazir-windows.zip
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath hasbuna-windows.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: munazir-windows
-          path: munazir-windows.zip
+          name: hasbuna-windows
+          path: hasbuna-windows.zip
 
   release:
     needs: [android, windows]
@@ -67,10 +71,10 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: مُناظِر v1.0.${{ github.run_number }} (${{ github.ref_name }})
+          tag_name: v2.0.${{ github.run_number }}
+          name: حسبنا كتاب الله v2.0.${{ github.run_number }} (${{ github.ref_name }})
           prerelease: ${{ github.ref_name != 'main' }}
           target_commitish: ${{ github.sha }}
           files: |
-            munazir-android.apk
-            munazir-windows.zip
+            hasbuna-android.apk
+            hasbuna-windows.zip
