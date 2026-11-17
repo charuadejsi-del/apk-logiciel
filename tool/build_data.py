@@ -8,7 +8,7 @@ quran=json.load(open('/home/claude/apk-logiciel/assets/data/quran.json'))
 def vok(r):
     s,a=map(int,r.split(':')); return 1<=s<=114 and 1<=a<=len(quran[s-1]['ayat'])
 BN={'bukhari':'صحيح البخاري','muslim':'صحيح مسلم','ibnmajah':'سنن ابن ماجه','abudawud':'سنن أبي داود','tirmidhi':'جامع الترمذي','nasai':'سنن النسائي','malik':'موطأ مالك','ahmad':'مسند أحمد'}
-GR={'sahih':'صحيح','hasan':'حسن','hasan sahih':'حسن صحيح','daif':'ضعيف',"da'if":'ضعيف','maudu':'موضوع',"munkar":'منكر','shadh':'شاذ','sahih lighairihi':'صحيح لغيره','hasan lighairihi':'حسن لغيره'}
+GR={'sahih':'صحيح','hasan':'حسن','hasan sahih':'حسن صحيح','hasan sahih isnaad':'حسن صحيح الإسناد','sahih isnaad':'صحيح الإسناد','hasan isnaad':'حسن الإسناد','sahih hadith':'صحيح','sahih muquf':'صحيح موقوف','sahih maqtu':'صحيح مقطوع','sahih isnaad mauquf':'صحيح الإسناد موقوف','sahih isnaad maqtu':'صحيح الإسناد مقطوع','sahih mutawatir':'صحيح متواتر','daif':'ضعيف','very daif':'ضعيف جداً','mawdu':'موضوع','munkar':'منكر','shadh':'شاذ'}
 def grade(b,h):
     if b in('bukhari','muslim'): return 'صحيح (من أحاديث الصحيحين)'
     for g in h.get('grades',[]):

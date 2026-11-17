@@ -34,7 +34,7 @@ def ok(b,h):
     if b in('bukhari','muslim'): return True
     for g in h.get('grades',[]):
         if 'Albani' in g.get('name',''):
-            return g['grade'].strip().lower().startswith('sahih')
+            gr=g['grade'].strip().lower(); return gr.startswith('sahih') or gr.startswith('hasan')
     return False
 cand=collections.defaultdict(list); seen=set()
 for b in ('bukhari','muslim')+SAHIH_SUNAN:
