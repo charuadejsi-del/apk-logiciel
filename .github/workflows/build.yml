@@ -1,0 +1,74 @@
+name: Build APK + Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate platform folders
+        run: |
+          flutter create --platforms=android,windows --org com.munazir --project-name munazir .
+          sed -i 's/android:label="munazir"/android:label="مُناظِر"/' android/app/src/main/AndroidManifest.xml
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+      - run: flutter build apk --release
+      - run: cp build/app/outputs/flutter-apk/app-release.apk munazir-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: munazir-android
+          path: munazir-android.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate platform folders
+        run: flutter create --platforms=android,windows --org com.munazir --project-name munazir .
+      - name: Window title
+        shell: pwsh
+        run: (Get-Content windows/runner/main.cpp) -replace 'L"munazir"', 'L"Munazir"' | Set-Content windows/runner/main.cpp
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath munazir-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: munazir-windows
+          path: munazir-windows.zip
+
+  release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: مُناظِر v1.0.${{ github.run_number }}
+          files: |
+            munazir-android.apk
+            munazir-windows.zip
