@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -31,6 +32,7 @@ class _HasbunaAppState extends State<HasbunaApp> {
     return ListenableBuilder(
       listenable: AppState.I,
       builder: (context, _) => MaterialApp(
+        scrollBehavior: const _AppScroll(),
         title: Brand.name,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(Brightness.light),
@@ -269,4 +271,12 @@ class _NavItem extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Sur Windows : glisser à la souris fait défiler les rangées horizontales.
+class _AppScroll extends MaterialScrollBehavior {
+  const _AppScroll();
+  @override
+  Set<PointerDeviceKind> get dragDevices =>
+      {PointerDeviceKind.touch, PointerDeviceKind.mouse, PointerDeviceKind.trackpad, PointerDeviceKind.stylus};
 }

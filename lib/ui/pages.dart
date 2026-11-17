@@ -404,7 +404,7 @@ class _ObjectionsPageState extends State<ObjectionsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('الاعتراضات والردود')),
       body: MasterDetail(
-        detail: sel == null ? null : ObjectionDetail(d.objectionById[sel]!, key: ValueKey(sel)),
+        detail: (sel ?? (list.isEmpty ? null : list.first.id)) == null ? null : ObjectionDetail(d.objectionById[sel ?? list.first.id]!, key: ValueKey(sel ?? list.first.id)),
         list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في الاعتراضات…', onChanged: (v) => setState(() => q = v)),
         _Chips(
@@ -420,7 +420,7 @@ class _ObjectionsPageState extends State<ObjectionsPage> {
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
                   itemBuilder: (context, i) => tileFor('o:${list[i].id}',
-                      selected: sel == list[i].id,
+                      selected: splitView(context) && (sel ?? list.first.id) == list[i].id,
                       onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
@@ -437,12 +437,8 @@ class _Chips extends StatelessWidget {
   final ValueChanged<String?> onSelect;
   const _Chips({required this.all, required this.items, required this.selected, required this.onSelect});
   @override
-  Widget build(BuildContext context) => SizedBox(
-        height: 44,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          children: [
+  Widget build(BuildContext context) {
+    final chips = <Widget>[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 3),
               child: ChoiceChip(label: Text(all), selected: selected == null, onSelected: (_) => onSelect(null)),
@@ -456,9 +452,22 @@ class _Chips extends StatelessWidget {
                   onSelected: (_) => onSelect(selected == it.$1 ? null : it.$1),
                 ),
               ),
-          ],
-        ),
+          ];
+    if (isWide(context)) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(10, 2, 10, 6),
+        child: Wrap(runSpacing: 6, children: chips),
       );
+    }
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        children: chips,
+      ),
+    );
+  }
 }
 
 class ObjectionDetail extends StatelessWidget {
@@ -523,7 +532,7 @@ class _ContradictionsPageState extends State<ContradictionsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('التناقضات')),
       body: MasterDetail(
-        detail: sel == null ? null : ContradictionDetail(d.contraById[sel]!, key: ValueKey(sel)),
+        detail: (sel ?? (list.isEmpty ? null : list.first.id)) == null ? null : ContradictionDetail(d.contraById[sel ?? list.first.id]!, key: ValueKey(sel ?? list.first.id)),
         list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في التناقضات…', onChanged: (v) => setState(() => q = v)),
         _Chips(
@@ -539,7 +548,7 @@ class _ContradictionsPageState extends State<ContradictionsPage> {
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
                   itemBuilder: (context, i) => tileFor('c:${list[i].id}',
-                      selected: sel == list[i].id,
+                      selected: splitView(context) && (sel ?? list.first.id) == list[i].id,
                       onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
@@ -672,7 +681,7 @@ class _ChainsPageState extends State<ChainsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('سلاسل الحجج')),
       body: MasterDetail(
-        detail: sel == null ? null : ChainDetail(d.chainById[sel]!, key: ValueKey(sel)),
+        detail: (sel ?? (list.isEmpty ? null : list.first.id)) == null ? null : ChainDetail(d.chainById[sel ?? list.first.id]!, key: ValueKey(sel ?? list.first.id)),
         list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في السلاسل…', onChanged: (v) => setState(() => q = v)),
         Expanded(
@@ -682,7 +691,7 @@ class _ChainsPageState extends State<ChainsPage> {
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
                   itemBuilder: (context, i) => tileFor('s:${list[i].id}',
-                      selected: sel == list[i].id,
+                      selected: splitView(context) && (sel ?? list.first.id) == list[i].id,
                       onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
@@ -811,7 +820,7 @@ class _HadithsPageState extends State<HadithsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('مراجع الأحاديث')),
       body: MasterDetail(
-        detail: sel == null ? null : HadithDetail(d.hadithById[sel]!, key: ValueKey(sel)),
+        detail: (sel ?? (list.isEmpty ? null : list.first.id)) == null ? null : HadithDetail(d.hadithById[sel ?? list.first.id]!, key: ValueKey(sel ?? list.first.id)),
         list: Column(children: [
         SearchField(controller: ctrl, hint: 'ابحث في الأحاديث…', onChanged: (v) => setState(() => q = v)),
         _Chips(
@@ -827,7 +836,7 @@ class _HadithsPageState extends State<HadithsPage> {
                   padding: const EdgeInsets.only(top: 6, bottom: 30),
                   itemCount: list.length,
                   itemBuilder: (context, i) => tileFor('h:${list[i].id}',
-                      selected: sel == list[i].id,
+                      selected: splitView(context) && (sel ?? list.first.id) == list[i].id,
                       onTap: splitView(context) ? () => setState(() => sel = list[i].id) : null),
                 ),
         ),
