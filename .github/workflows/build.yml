@@ -2,7 +2,7 @@ name: Build APK + Windows
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   workflow_dispatch:
 
 permissions:
@@ -68,7 +68,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: مُناظِر v1.0.${{ github.run_number }}
+          name: مُناظِر v1.0.${{ github.run_number }} (${{ github.ref_name }})
+          prerelease: ${{ github.ref_name != 'main' }}
+          target_commitish: ${{ github.sha }}
           files: |
             munazir-android.apk
             munazir-windows.zip

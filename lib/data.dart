@@ -207,7 +207,9 @@ class AppData {
     for (final r in h.refs) {
       b.writeln('﴿${verseText(r)}﴾ [${refLabel(r)}]');
     }
-    b.writeln()..writeln('للتحقق: ${h.url}');
+    b
+      ..writeln()
+      ..writeln('للتحقق: ${h.url}');
     return b.toString().trim();
   }
 }
