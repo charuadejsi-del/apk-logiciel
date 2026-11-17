@@ -473,7 +473,7 @@ List<BookHadith> _parseBook(String raw) {
   final rows = jsonDecode(raw) as List;
   return rows.map((r) {
     final t = r[1] as String;
-    return BookHadith(r[0] as int, t, norm(t));
+    return BookHadith((r[0] as num).toInt(), t, norm(t));
   }).toList();
 }
 
