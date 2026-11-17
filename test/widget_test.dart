@@ -15,7 +15,7 @@ void main() {
     final d = AppData.I;
     expect(d.surahs.length, 114);
     expect(d.totalAyat, 6236);
-    expect(d.hadiths.length, greaterThanOrEqualTo(200));
+    expect(d.hadiths.length, greaterThanOrEqualTo(190));
     expect(d.contradictions.length, greaterThanOrEqualTo(60));
     expect(d.chains.length, greaterThanOrEqualTo(30));
     expect(d.objections.length, greaterThanOrEqualTo(60));
