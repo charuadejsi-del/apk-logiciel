@@ -115,7 +115,8 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
   late final ctrl = TextEditingController(text: widget.initial);
   late String q = widget.initial;
   Timer? _deb;
-  late final Future<List<List<BookHadith>>> books = Future.wait([Books.load('bukhari'), Books.load('muslim')]);
+  late final Future<List<List<BookHadith>>> books =
+      Future.wait([Books.load('bukhari'), Books.load('muslim'), Books.load('tabari')]);
   String book = 'all';
 
   @override
@@ -178,7 +179,7 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
                           style: TextStyle(color: s.onSurfaceVariant)),
                     ),
                   if (groups.isNotEmpty) ...[
-                    const SectionHeader('بحث موسّع في الصحيحين', icon: Icons.travel_explore_rounded),
+                    const SectionHeader('بحث موسّع: البخاري ومسلم وتاريخ الطبري', icon: Icons.travel_explore_rounded),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
                       child: Wrap(spacing: 6, runSpacing: 6, children: [
@@ -203,9 +204,11 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
                         }
                         final bk = expandedSearch(snap.data![0], groups);
                         final ms = expandedSearch(snap.data![1], groups);
+                        final tb = expandedSearch(snap.data![2], groups);
                         final list = [
-                          if (book != 'muslim') ...bk.map((h) => ('bukhari', h)),
-                          if (book != 'bukhari') ...ms.map((h) => ('muslim', h)),
+                          if (book == 'all' || book == 'bukhari') ...bk.map((h) => ('bukhari', h)),
+                          if (book == 'all' || book == 'muslim') ...ms.map((h) => ('muslim', h)),
+                          if (book == 'all' || book == 'tabari') ...tb.map((h) => ('tabari', h)),
                         ];
                         final words = groups.expand((g) => g).toList();
                         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -213,7 +216,7 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: Wrap(spacing: 6, children: [
                               ChoiceChip(
-                                  label: Text('الكل (${arNum(bk.length + ms.length)})'),
+                                  label: Text('الكل (${arNum(bk.length + ms.length + tb.length)})'),
                                   selected: book == 'all',
                                   onSelected: (_) => setState(() => book = 'all')),
                               ChoiceChip(
@@ -224,6 +227,10 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
                                   label: Text('مسلم (${arNum(ms.length)})'),
                                   selected: book == 'muslim',
                                   onSelected: (_) => setState(() => book = 'muslim')),
+                              ChoiceChip(
+                                  label: Text('الطبري (${arNum(tb.length)})'),
+                                  selected: book == 'tabari',
+                                  onSelected: (_) => setState(() => book = 'tabari')),
                             ]),
                           ),
                           if (list.isEmpty)
@@ -330,7 +337,7 @@ class _BookHit extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       onTap: () => showBookHadith(context, name, h),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('$name — رقم ${h.num}', style: TextStyle(color: s.tertiary, fontWeight: FontWeight.w800, fontSize: 13)),
+        Text('$name — ${h.ref}', style: TextStyle(color: s.tertiary, fontWeight: FontWeight.w800, fontSize: 13)),
         const SizedBox(height: 4),
         HighlightedText(text: t, words: words, color: s.primary, style: hadithStyle.copyWith(fontSize: 16.5)),
       ]),
@@ -347,7 +354,8 @@ void showBookHadith(BuildContext context, String name, BookHadith h) {
       expand: false,
       initialChildSize: 0.7,
       builder: (ctx, sc) => ListView(controller: sc, padding: const EdgeInsets.fromLTRB(18, 0, 18, 24), children: [
-        Text('$name — رقم ${h.num}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+        Text('$name — ${h.ref}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+        if (h.section.isNotEmpty) Text(h.section, style: const TextStyle(fontSize: 13)),
         const SizedBox(height: 10),
         SelectableText(h.text, style: hadithStyle),
         const SizedBox(height: 12),
@@ -355,11 +363,11 @@ void showBookHadith(BuildContext context, String name, BookHadith h) {
           OutlinedButton.icon(
               icon: const Icon(Icons.copy_rounded),
               label: const Text('نسخ'),
-              onPressed: () => copyText(context, '${h.text}\n[$name ${h.num}]')),
+              onPressed: () => copyText(context, '${h.text}\n[$name ${h.ref}]')),
           OutlinedButton.icon(
               icon: const Icon(Icons.share_rounded),
               label: const Text('مشاركة'),
-              onPressed: () => shareText(context, '${h.text}\n[$name ${h.num}]')),
+              onPressed: () => shareText(context, '${h.text}\n[$name ${h.ref}]')),
         ]),
       ]),
     ),

@@ -136,14 +136,15 @@ class _BooksPageState extends State<BooksPage> {
   Widget build(BuildContext context) {
     final res = list == null ? <BookHadith>[] : Books.search(list!, q);
     return Scaffold(
-      appBar: AppBar(title: const Text('البحث في الصحيحين')),
+      appBar: AppBar(title: const Text('البحث في الكتب')),
       body: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
           child: SegmentedButton<String>(
             segments: const [
-              ButtonSegment(value: 'bukhari', label: Text('صحيح البخاري')),
-              ButtonSegment(value: 'muslim', label: Text('صحيح مسلم')),
+              ButtonSegment(value: 'bukhari', label: Text('البخاري')),
+              ButtonSegment(value: 'muslim', label: Text('مسلم')),
+              ButtonSegment(value: 'tabari', label: Text('تاريخ الطبري')),
             ],
             selected: {book},
             onSelectionChanged: (v) {
@@ -154,7 +155,7 @@ class _BooksPageState extends State<BooksPage> {
         ),
         SearchField(
             controller: ctrl,
-            hint: 'كلمة من الحديث، أو رقمه',
+            hint: book == 'tabari' ? 'كلمة أو عبارة من الخبر' : 'كلمة من الحديث، أو رقمه',
             onChanged: (v) => setState(() => q = v)),
         if (loading) const LinearProgressIndicator(),
         Expanded(
@@ -162,7 +163,10 @@ class _BooksPageState extends State<BooksPage> {
               ? const SizedBox.shrink()
               : q.trim().isEmpty
                   ? EmptyState(
-                      '${arNum(list!.length)} رواية في ${Books.names[book]}.\nاكتب جزءاً من الحديث الذي يذكره المحاور لتجده فوراً.',
+                      book == 'tabari'
+                          ? '${arNum(list!.length)} خبراً في تاريخ الطبري (١٠ مجلدات، طبعة دار التراث).\n'
+                              'تنبيه: الطبري لا يصحّح أخباره، بل ينقلها بأسانيدها كما بلغته (المقدمة ج ١ ص ٧).'
+                          : '${arNum(list!.length)} رواية في ${Books.names[book]}.\nاكتب جزءاً من الحديث الذي يذكره المحاور لتجده فوراً.',
                       icon: Icons.library_books_rounded)
                   : res.isEmpty
                       ? const EmptyState('لا توجد نتائج')
@@ -184,8 +188,8 @@ class _BookTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
-    final ref = '${Books.names[book]} — رقم ${h.num}';
-    final url = 'https://sunnah.com/$book:${h.num}';
+    final ref = '${Books.names[book]} — ${h.ref}';
+    final url = book == 'tabari' ? 'https://shamela.ws/book/9783' : 'https://sunnah.com/$book:${h.num}';
     return AppCard(
       onTap: () => showDialog(
         context: context,
@@ -193,10 +197,19 @@ class _BookTile extends StatelessWidget {
           title: Text(ref),
           content: SizedBox(
             width: 640,
-            child: SingleChildScrollView(child: SelectableText(h.text, style: hadithStyle)),
+            child: SingleChildScrollView(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                if (h.section.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(h.section, style: TextStyle(color: s.primary, fontWeight: FontWeight.w700)),
+                  ),
+                SelectableText(h.text, style: hadithStyle),
+              ]),
+            ),
           ),
           actions: [
-            TextButton(onPressed: () => openUrl(context, url), child: const Text('sunnah.com')),
+            TextButton(onPressed: () => openUrl(context, url), child: Text(book == 'tabari' ? 'الشاملة' : 'sunnah.com')),
             TextButton(onPressed: () => copyText(context, '${h.text}\n\n$ref\n$url'), child: const Text('نسخ')),
             FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
           ],
@@ -204,6 +217,12 @@ class _BookTile extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Pill(ref, color: s.tertiary),
+        if (h.section.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(h.section, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: s.primary, fontWeight: FontWeight.w700)),
+          ),
         const SizedBox(height: 6),
         Text(h.text, maxLines: 4, overflow: TextOverflow.ellipsis, style: hadithStyle.copyWith(fontSize: 16.5)),
       ]),

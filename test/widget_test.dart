@@ -98,6 +98,10 @@ void main() {
       }
     }
     expect(AppData.contentSchema, greaterThanOrEqualTo(3));
+    final tb = await Books.load('tabari');
+    expect(tb.length, greaterThanOrEqualTo(20000));
+    expect(tb.first.vol, 1);
+    expect(Books.search(tb, 'فما يكن في كتابي هذا').isNotEmpty || Books.search(tb, 'وليعلم الناظر في كتابنا').isNotEmpty, isTrue);
     expect(d.hasPages, isTrue);
     expect(d.pageOf(2, 255), 42);
     expect(d.pageOf(114, 1), 604);

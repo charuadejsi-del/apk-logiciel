@@ -799,7 +799,32 @@ class BookHadith {
   final int num;
   final String text;
   final String key;
-  BookHadith(this.num, this.text, this.key);
+  final int vol, page; // pour les livres paginés (tarikh al-Tabari)
+  final String section;
+  BookHadith(this.num, this.text, this.key, {this.vol = 0, this.page = 0, this.section = ''});
+
+  /// Référence courte : « رقم 123 » ou « ج 3 ص 201 ».
+  String get ref => vol > 0 ? 'ج ${arDigits(vol)} ص ${arDigits(page)}' : 'رقم $num';
+}
+
+String arDigits(int n) {
+  const d = '٠١٢٣٤٥٦٧٨٩';
+  return '$n'.split('').map((c) => d[int.parse(c)]).join();
+}
+
+/// Tarikh al-Tabari (OpenITI, éd. Dar al-Turath) : {h: titres, r: [[vol, page, titre, texte]]}.
+List<BookHadith> _parseTabari(String raw) {
+  final m = jsonDecode(raw) as Map<String, dynamic>;
+  final heads = List<String>.from(m['h'] as List);
+  final rows = m['r'] as List;
+  var i = 0;
+  return rows.map((r) {
+    final t = r[3] as String;
+    final h = (r[2] as num).toInt();
+    i++;
+    return BookHadith(i, t, norm(t),
+        vol: (r[0] as num).toInt(), page: (r[1] as num).toInt(), section: h >= 0 && h < heads.length ? heads[h] : '');
+  }).toList();
 }
 
 List<BookHadith> _parseBook(String raw) {
@@ -811,14 +836,14 @@ List<BookHadith> _parseBook(String raw) {
 }
 
 class Books {
-  static const names = {'bukhari': 'صحيح البخاري', 'muslim': 'صحيح مسلم'};
+  static const names = {'bukhari': 'صحيح البخاري', 'muslim': 'صحيح مسلم', 'tabari': 'تاريخ الطبري'};
   static final Map<String, List<BookHadith>> _cache = {};
 
   static Future<List<BookHadith>> load(String key) async {
     final c = _cache[key];
     if (c != null) return c;
     final raw = await rootBundle.loadString('assets/data/books/$key.json');
-    final list = await compute(_parseBook, raw);
+    final list = await compute(key == 'tabari' ? _parseTabari : _parseBook, raw);
     _cache[key] = list;
     return list;
   }
@@ -826,7 +851,7 @@ class Books {
   static List<BookHadith> search(List<BookHadith> list, String q, {int limit = 150}) {
     final w = queryWords(q);
     final n = int.tryParse(q.trim());
-    if (n != null) return list.where((h) => h.num == n).toList();
+    if (n != null && (list.isEmpty || list.first.vol == 0)) return list.where((h) => h.num == n).toList();
     if (w.isEmpty) return [];
     final out = <BookHadith>[];
     for (final h in list) {
