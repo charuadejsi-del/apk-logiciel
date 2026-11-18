@@ -13,6 +13,7 @@ import '../state.dart';
 import 'pages.dart';
 import 'pages2.dart';
 import 'cases.dart';
+import 'fatwas.dart';
 
 // ───────────────────────── Thème ─────────────────────────
 
@@ -136,6 +137,9 @@ void openTag(BuildContext context, String tag) {
     case 'k':
       final k = d.caseById[id];
       if (k != null) page = CaseDetail(k);
+    case 'f':
+      final f = d.fatwaById[id];
+      if (f != null) page = FatwaDetail(f);
     case 'v':
       final r = VerseRef.parse(id);
       page = SurahReader(surah: r.surah, ayah: r.ayah);
@@ -155,6 +159,7 @@ String tagTitle(String tag) {
     'a' => d.argumentById[id]?.title ?? id,
     'v' => d.refLabelS(id),
     'k' => d.caseById[id]?.title ?? id,
+    'f' => d.fatwaById[id]?.title ?? id,
     _ => id,
   };
 }
@@ -167,6 +172,7 @@ const kindInfo = {
   'a': ('حجة', Icons.verified_rounded),
   'v': ('آية', Icons.auto_stories_rounded),
   'k': ('قضية', Icons.folder_special_rounded),
+  'f': ('فتوى', Icons.gavel_rounded),
 };
 
 // ───────────────────────── Composants ─────────────────────────
@@ -487,6 +493,7 @@ class ItemTile extends StatelessWidget {
       's' => s.primary,
       'h' => s.tertiary,
       'k' => C.goldDeep,
+      'f' => const Color(0xFF8E3B5A),
       _ => s.secondary,
     };
     return AppCard(
@@ -588,6 +595,16 @@ Widget tileFor(String tag, {VoidCallback? onTap, bool selected = false}) {
     case 'a':
       final a = d.argumentById[id]!;
       return ItemTile(onTap: onTap, selected: selected, tag: tag, title: a.title, subtitle: a.text, copy: d.argumentToText(a));
+    case 'f':
+      final f = d.fatwaById[id]!;
+      return ItemTile(
+          onTap: onTap,
+          selected: selected,
+          tag: tag,
+          title: f.title,
+          subtitle: f.comment,
+          pills: [Pill(f.scholar, color: const Color(0xFF8E3B5A)), Pill(f.madhab)],
+          copy: d.fatwaToText(f));
   }
   return const SizedBox.shrink();
 }

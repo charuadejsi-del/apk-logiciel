@@ -94,6 +94,10 @@ def narrator(text):
     return best[1] if best else ''
 for h in hadiths:
     h['narrator']=narrator(h['text'])
+fatwas=[]
+for (fid,title,who,mad,src,quote,isq,refs,com,rel,url) in getattr(C,'FATWAS',[]):
+    for r in refs+rel: chk(r,fid)
+    fatwas.append(dict(id=fid,title=title,scholar=who,madhab=mad,source=src,quote=quote,isQuote=isq,refs=refs,comment=com,related=rel,url=url))
 if errs:
     print('\n'.join(errs)); sys.exit(1)
 content=dict(version=2,
@@ -102,6 +106,6 @@ content=dict(version=2,
   arguments=[dict(id=i,title=t,text=x,refs=r) for i,t,x,r in C.ARGUMENTS],
   hadithCategories=[dict(id=i,title=t) for i,t in C.HCATS],
   hadiths=hadiths, contradictions=contra, chains=chains, cases=cases,
-  timeline=[dict(h=a,g=b2,title=t,text=x) for a,b2,t,x in C.TIMELINE])
+  timeline=[dict(h=a,g=b2,title=t,text=x) for a,b2,t,x in C.TIMELINE], fatwas=fatwas)
 json.dump(content,open(f'{OUT}/content.json','w'),ensure_ascii=False,indent=0)
 print('OK', {k:len(v) for k,v in content.items() if isinstance(v,list)})

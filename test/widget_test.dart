@@ -77,6 +77,16 @@ void main() {
     expect(d.byNarrator.isNotEmpty, isTrue);
     expect(d.timeline.length, greaterThanOrEqualTo(10));
     expect(d.surah(2).uth.length, 286);
+    expect(d.fatwas.length, greaterThanOrEqualTo(16));
+    for (final f in d.fatwas) {
+      for (final r in f.refs) {
+        checkRef(r, f.id);
+      }
+      for (final h in f.related) {
+        expect(d.hadithById.containsKey(h), isTrue, reason: '${f.id}: $h');
+      }
+      expect(f.source.isNotEmpty && f.url.startsWith('https://'), isTrue, reason: f.id);
+    }
     expect(d.hasPages, isTrue);
     expect(d.pageOf(2, 255), 42);
     expect(d.pageOf(114, 1), 604);

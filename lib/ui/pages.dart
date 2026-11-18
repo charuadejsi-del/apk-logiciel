@@ -7,6 +7,7 @@ import 'pages2.dart';
 import 'cases.dart';
 import 'extra.dart';
 import 'links.dart';
+import 'fatwas.dart';
 
 /// Navigation globale entre sections.
 final ValueNotifier<String> shellNav = ValueNotifier('home');
@@ -21,6 +22,7 @@ const sectionInfo = <String, (String, IconData)>{
   'chains': ('سلاسل الحجج', Icons.account_tree_rounded),
   'hadiths': ('الأحاديث', Icons.menu_book_rounded),
   'arguments': ('الحجج', Icons.verified_rounded),
+  'fatwas': ('فتاوى تخالف القرآن', Icons.gavel_rounded),
   'narrators': ('الرواة', Icons.people_alt_rounded),
   'timeline': ('الخط الزمني', Icons.timeline_rounded),
   'quran': ('المصحف', Icons.auto_stories_rounded),
@@ -36,6 +38,7 @@ Widget pageFor(String id) => switch (id) {
       'debate' => const DebatePage(),
       'cases' => const CasesPage(),
       'narrators' => const NarratorsPage(),
+      'fatwas' => const FatwasPage(),
       'timeline' => const TimelinePage(),
       'objections' => const ObjectionsPage(),
       'contra' => const ContradictionsPage(),
@@ -49,7 +52,7 @@ Widget pageFor(String id) => switch (id) {
       'mine' => const MinePage(),
       'settings' => const SettingsPage(),
       _ => const HubPage(title: 'المزيد', ids: [
-          'contra', 'chains', 'hadiths', 'objections', 'arguments', 'narrators', 'timeline', 'books', 'training',
+          'contra', 'chains', 'hadiths', 'fatwas', 'objections', 'arguments', 'narrators', 'timeline', 'books', 'training',
           'favorites', 'mine', 'settings'
         ]),
     };
@@ -85,6 +88,7 @@ class HubPage extends StatelessWidget {
           'mine' => 'أضف حججك وملاحظاتك الخاصة',
           'settings' => 'الخط والمظهر وتحديث المحتوى',
           'narrators' => 'الصحابة الرواة وتناقضات رواياتهم',
+          'fatwas' => 'أقوال فقهية موثقة من كتبها تخالف العقل والقرآن',
           'timeline' => 'من نزول القرآن إلى تدوين الحديث',
           _ => '',
         };

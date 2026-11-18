@@ -164,6 +164,18 @@ class HLink {
   HLink(this.type, this.title, this.why, this.items, {this.open, this.chain, this.step = 0});
 }
 
+/// Fatwa ou avis juridique contraire à la raison ou au Coran, avec sa source vérifiée.
+class Fatwa {
+  final String id, title, scholar, madhab, source, quote, comment, url;
+  final bool isQuote;
+  final List<String> refs, related;
+  final String kTitle, kBody;
+  Fatwa(this.id, this.title, this.scholar, this.madhab, this.source, this.quote, this.isQuote, this.refs, this.comment,
+      this.related, this.url)
+      : kTitle = norm(title),
+        kBody = norm('$scholar $madhab $source $quote $comment');
+}
+
 class TimelineEvent {
   final String h, g, title, text;
   TimelineEvent(this.h, this.g, this.title, this.text);
@@ -192,6 +204,8 @@ class AppData {
   final List<Chain> chains;
   final List<CaseFile> cases;
   final List<TimelineEvent> timeline;
+  List<Fatwa> fatwas = const [];
+  late final Map<String, Fatwa> fatwaById = {for (final f in fatwas) f.id: f};
   final bool fromUpdate;
 
   late final Map<String, Hadith> hadithById = {for (final h in hadiths) h.id: h};
@@ -425,7 +439,7 @@ class AppData {
   static AppData _build(String qRaw, String cRaw, bool fromUpdate) {
     final q = jsonDecode(qRaw) as List;
     final c = parseContent(cRaw);
-    return AppData(
+    final a = AppData(
       q
           .map((s) => Surah(
                 s['n'] as int,
@@ -499,6 +513,11 @@ class AppData {
           .toList(),
       fromUpdate,
     );
+    a.fatwas = ((c['fatwas'] ?? const []) as List)
+        .map((f) => Fatwa(f['id'], f['title'], f['scholar'] ?? '', f['madhab'] ?? '', f['source'] ?? '', f['quote'] ?? '',
+            f['isQuote'] == true, _sl(f['refs']), f['comment'] ?? '', _sl(f['related']), f['url'] ?? ''))
+        .toList();
+    return a;
   }
 
   // ─── Coran
@@ -578,6 +597,10 @@ class AppData {
       final s = scoreOf(a.kTitle, a.kBody, w);
       if (s > 0) hits.add(Hit('a', a.id, s));
     }
+    for (final f in fatwas) {
+      final s = scoreOf(f.kTitle, f.kBody, w);
+      if (s > 0) hits.add(Hit('f', f.id, s + 1));
+    }
     hits.sort((x, y) => y.score.compareTo(x.score));
     return hits;
   }
@@ -636,6 +659,25 @@ class AppData {
 }
 
 extension CaseText on AppData {
+  String fatwaToText(Fatwa f) {
+    final b = StringBuffer()
+      ..writeln('⚖ فتوى: ${f.title}')
+      ..writeln('القائل: ${f.scholar} (${f.madhab})')
+      ..writeln('المصدر: ${f.source}')
+      ..writeln()
+      ..writeln(f.isQuote ? '«${f.quote}»' : f.quote)
+      ..writeln()
+      ..writeln('وجه المخالفة: ${f.comment}')
+      ..writeln()
+      ..writeln(_versesF(f.refs))
+      ..writeln()
+      ..write('— ${Brand.name}');
+    return b.toString();
+  }
+
+  String _versesF(List<String> refs) =>
+      refs.where(isVerseRef).map((r) => '﴿${verseTextS(r)}﴾ [${refLabelS(r)}]').join('\n');
+
   String caseToText(CaseFile k) {
     final b = StringBuffer()
       ..writeln('📁 ملف القضية: ${k.title}')
