@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:munazir/data.dart';
 
@@ -98,6 +100,10 @@ void main() {
       }
     }
     expect(AppData.contentSchema, greaterThanOrEqualTo(3));
+    // Un contenu mal décodé (latin-1) doit être refusé.
+    final good = await rootBundle.loadString('assets/data/content.json');
+    expect(() => AppData.parseContent(latin1.decode(utf8.encode(good))), throwsFormatException);
+    expect(AppData.parseContent(good), isNotEmpty);
     final tb = await Books.load('tabari');
     expect(tb.length, greaterThanOrEqualTo(20000));
     expect(tb.first.vol, 1);

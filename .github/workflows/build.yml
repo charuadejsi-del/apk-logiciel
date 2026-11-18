@@ -78,7 +78,8 @@ jobs:
           merge-multiple: true
       - name: Content and release notes
         run: |
-          cp src/assets/data/content.json content.json
+          # Contenu publié en ASCII pur (\uXXXX) : lisible même par les versions qui le décodaient en latin-1.
+          python3 -c "import json;json.dump(json.load(open('src/assets/data/content.json',encoding='utf-8')),open('content.json','w'),ensure_ascii=True,separators=(',',':'))"
           git -C src log -1 --pretty=%B | grep -v -e '^Co-Authored-By' -e '^Claude-Session' > notes.md
       - uses: softprops/action-gh-release@v2
         with:

@@ -456,7 +456,12 @@ class AppData {
         }
       }
     } catch (_) {
+      // Mise à jour invalide ou mal décodée : on revient au contenu intégré et on la supprime.
       fromUpdate = false;
+      contentBuild = appBuild;
+      try {
+        await resetUpdate();
+      } catch (_) {}
     }
     I = _build(qRaw, cRaw, fromUpdate);
   }
@@ -467,6 +472,12 @@ class AppData {
     if ((c['version'] as num? ?? 0) < 2) throw const FormatException('نسخة المحتوى قديمة');
     for (final k in ['objections', 'hadiths', 'contradictions', 'chains', 'arguments']) {
       if (c[k] is! List) throw FormatException('حقل مفقود: $k');
+    }
+    // Refuse un texte mal décodé (ex. « Ø³Ù… » au lieu de l'arabe).
+    final sample = (c['hadiths'] as List).take(20).map((h) => '${(h as Map)['title'] ?? ''}').join(' ');
+    final arabic = RegExp(r'[\u0621-\u064A]').allMatches(sample).length;
+    if (sample.isNotEmpty && (arabic < sample.length ~/ 4 || sample.contains('Ø'))) {
+      throw const FormatException('ترميز المحتوى غير صالح');
     }
     return c;
   }

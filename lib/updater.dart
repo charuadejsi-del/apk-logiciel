@@ -32,7 +32,7 @@ class Updater {
     final r = await http
         .get(Uri.parse(_api), headers: {'Accept': 'application/vnd.github+json'}).timeout(const Duration(seconds: 20));
     if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
-    for (final x in (jsonDecode(r.body) as List)) {
+    for (final x in (jsonDecode(utf8.decode(r.bodyBytes)) as List)) {
       if (x['draft'] == true) continue;
       final tag = (x['tag_name'] ?? '') as String;
       final b = int.tryParse(tag.split('.').last) ?? 0;
@@ -54,10 +54,12 @@ class Updater {
     if (rel.content == null || rel.build <= AppData.contentBuild) return false;
     final r = await http.get(Uri.parse(rel.content!)).timeout(const Duration(seconds: 60));
     if (r.statusCode != 200) return false;
-    final c = AppData.parseContent(r.body);
+    // GitHub sert le fichier sans charset : décodage UTF-8 explicite (sinon latin-1 et texte illisible).
+    final raw = utf8.decode(r.bodyBytes);
+    final c = AppData.parseContent(raw);
     final schema = (c['schema'] as num?)?.toInt() ?? 2;
     if (schema > AppData.contentSchema) return false; // contenu prévu pour un programme plus récent
-    await AppData.installUpdate(r.body, build: rel.build);
+    await AppData.installUpdate(raw, build: rel.build);
     AppState.I.contentChanged();
     return true;
   }
