@@ -27,6 +27,10 @@ class AppState extends ChangeNotifier {
   int trainKnown = 0, trainUnknown = 0;
   String updateUrl = Brand.defaultUpdateUrl;
   bool mushafNight = true;
+  int mushafTheme = 0; // 0 ورقي، 1 أبيض، 2 ليلي
+  double mushafFont = 25;
+  int lastPage = 1;
+  final Set<int> bookmarks = {};
 
   Future<void> load() async {
     try {
@@ -45,6 +49,10 @@ class AppState extends ChangeNotifier {
       trainUnknown = p.getInt('trainUnknown') ?? 0;
       updateUrl = p.getString('updateUrl') ?? Brand.defaultUpdateUrl;
       mushafNight = p.getBool('mushafNight') ?? true;
+      mushafTheme = (p.getInt('mushafTheme') ?? 0).clamp(0, 2).toInt();
+      mushafFont = (p.getDouble('mushafFont') ?? 25).clamp(16, 44).toDouble();
+      lastPage = (p.getInt('lastPage') ?? 1).clamp(1, 604).toInt();
+      bookmarks.addAll((p.getStringList('bookmarks') ?? const []).map(int.tryParse).whereType<int>());
     } catch (_) {
       // Pas de stockage disponible : on garde les valeurs par défaut.
     }
@@ -62,10 +70,38 @@ class AppState extends ChangeNotifier {
     p.setInt('trainUnknown', trainUnknown);
     p.setString('updateUrl', updateUrl);
     p.setBool('mushafNight', mushafNight);
+    p.setInt('mushafTheme', mushafTheme);
+    p.setDouble('mushafFont', mushafFont);
+    p.setInt('lastPage', lastPage);
+    p.setStringList('bookmarks', bookmarks.map((e) => '$e').toList());
   }
 
   void setFontScale(double v) {
     fontScale = v;
+    _save();
+    notifyListeners();
+  }
+
+  void setMushafTheme(int v) {
+    mushafTheme = v;
+    _save();
+    notifyListeners();
+  }
+
+  void setMushafFont(double v) {
+    mushafFont = v;
+    _save();
+    notifyListeners();
+  }
+
+  /// Sauvegarde silencieuse (sans reconstruire l'interface).
+  void setLastPage(int v) {
+    lastPage = v;
+    _save();
+  }
+
+  void toggleBookmark(int page) {
+    if (!bookmarks.remove(page)) bookmarks.add(page);
     _save();
     notifyListeners();
   }

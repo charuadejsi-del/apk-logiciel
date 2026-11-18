@@ -1,330 +1,37 @@
 import 'dart:math';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../data.dart';
 import '../state.dart';
 import 'common.dart';
+import 'mushaf.dart';
 
 // ───────────────────────── Coran ─────────────────────────
 
-class QuranPage extends StatefulWidget {
+class QuranPage extends StatelessWidget {
   const QuranPage({super.key});
   @override
-  State<QuranPage> createState() => _QuranPageState();
+  Widget build(BuildContext context) => const MushafHome();
 }
 
-class _QuranPageState extends State<QuranPage> {
-  final ctrl = TextEditingController();
-  String q = '';
-
-  @override
-  void dispose() {
-    ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = AppData.I;
-    final ref = q.trim().isEmpty ? null : d.parseRefQuery(q);
-    final nq = norm(q);
-    final surahHits = nq.isEmpty ? d.surahs : d.surahs.where((s) => norm(s.name).contains(nq)).toList();
-    final verses = (nq.length < 2 || ref != null) ? <VerseRef>[] : d.searchQuran(q);
-    return Scaffold(
-      appBar: AppBar(title: const Text('القرآن الكريم')),
-      body: Column(children: [
-        SearchField(
-            controller: ctrl, hint: 'كلمة، أو اسم سورة، أو رقم آية (2:255)', onChanged: (v) => setState(() => q = v)),
-        Expanded(
-          child: ListView(padding: const EdgeInsets.only(bottom: 30), children: [
-            if (ref != null) VerseCard(ref.key),
-            if (nq.isNotEmpty && surahHits.isNotEmpty) const SectionHeader('السور', icon: Icons.list_rounded),
-            if (nq.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Wrap(children: [for (final s in surahHits) _SurahChip(s)]),
-              )
-            else
-              for (final s in surahHits) _SurahTile(s),
-            if (verses.isNotEmpty) ...[
-              SectionHeader('الآيات (${verses.length >= 200 ? '+٢٠٠' : arNum(verses.length)})',
-                  icon: Icons.auto_stories_rounded),
-              for (final v in verses) VerseCard(v.key),
-            ],
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-class _SurahChip extends StatelessWidget {
-  final Surah s;
-  const _SurahChip(this.s);
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        width: 172,
-        child: AppCard(
-          margin: const EdgeInsets.all(4),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SurahReader(surah: s.n))),
-          child: Row(children: [
-            CircleAvatar(radius: 16, child: Text(arNum(s.n), style: const TextStyle(fontSize: 12))),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(s.name, style: const TextStyle(fontFamily: 'Amiri', fontWeight: FontWeight.w700, fontSize: 17)),
-                Text('${s.meccan ? 'مكية' : 'مدنية'} • ${arNum(s.ayat.length)}',
-                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              ]),
-            ),
-          ]),
-        ),
-      );
-}
-
-class _SurahTile extends StatelessWidget {
-  final Surah s;
-  const _SurahTile(this.s);
-  @override
-  Widget build(BuildContext context) => ListTile(
-        leading: CircleAvatar(child: Text(arNum(s.n), style: const TextStyle(fontSize: 13))),
-        title: Text('سورة ${s.name}', style: const TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: Text('${s.meccan ? 'مكية' : 'مدنية'} • ${arNum(s.ayat.length)} آية'),
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SurahReader(surah: s.n))),
-      );
-}
-
-class SurahReader extends StatefulWidget {
+/// Compatibilité : ouvre le mushaf à la page du verset demandé.
+class SurahReader extends StatelessWidget {
   final int surah;
   final int ayah;
   const SurahReader({super.key, required this.surah, this.ayah = 1});
   @override
-  State<SurahReader> createState() => _SurahReaderState();
-}
-
-class _SurahReaderState extends State<SurahReader> {
-  static const chunk = 8;
-  late final Surah s = AppData.I.surah(widget.surah);
-  late final List<TapGestureRecognizer> taps;
-  late int? selected = widget.ayah > 1 ? widget.ayah : null;
-
-  @override
-  void initState() {
-    super.initState();
-    taps = List.generate(s.uth.length, (i) => TapGestureRecognizer()..onTap = () => _select(i + 1));
-  }
-
-  @override
-  void dispose() {
-    for (final t in taps) {
-      t.dispose();
-    }
-    super.dispose();
-  }
-
-  void _select(int a) {
-    setState(() => selected = a);
-    if (MediaQuery.of(context).size.width < 1100) _sheet(VerseRef(widget.surah, a));
-  }
-
-  void _sheet(VerseRef ref) {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: (AppData.I.verseUsage[ref.key] ?? const []).isEmpty ? 0.38 : 0.62,
-        builder: (ctx, sc) => ListView(controller: sc, children: [_VersePanel(ref: ref, host: context)]),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = AppData.I;
-    final night = AppState.I.mushafNight;
-    final bg = night ? const Color(0xFF0A1712) : C.cream;
-    final page = night ? const Color(0xFF0E1F18) : const Color(0xFFFFFDF7);
-    final ink = night ? const Color(0xFFECE5D1) : C.ink;
-    final gold = night ? const Color(0xFFA88A2A) : C.gold;
-    final start = ((widget.ayah - 1) ~/ chunk);
-    final chunks = (s.uth.length + chunk - 1) ~/ chunk;
-    final wide = MediaQuery.of(context).size.width >= 1100;
-    const centerKey = ValueKey('center');
-    final hasBasmala = widget.surah != 1 && widget.surah != 9;
-
-    Widget block(int c) {
-      final from = c * chunk, to = (from + chunk).clamp(0, s.uth.length).toInt();
-      final spans = <InlineSpan>[];
-      for (var i = from; i < to; i++) {
-        final n = i + 1;
-        final sel = selected == n;
-        final used = d.verseUsage.containsKey('${widget.surah}:$n');
-        spans.add(TextSpan(
-          text: '${s.uth[i]} ',
-          recognizer: taps[i],
-          style: sel
-              ? TextStyle(backgroundColor: (night ? C.gold : C.gold).withAlpha(night ? 55 : 45))
-              : null,
-        ));
-        spans.add(TextSpan(
-          text: '۝${arNum(n)} ',
-          recognizer: taps[i],
-          style: TextStyle(color: used ? (night ? C.goldLight : C.goldDeep) : gold),
-        ));
-      }
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 34),
-        child: Text.rich(
-          TextSpan(children: spans),
-          textAlign: TextAlign.justify,
-          style: quranStyle.copyWith(color: ink, fontSize: 27, height: 2.25),
-        ),
+  Widget build(BuildContext context) => MushafReader(
+        page: AppData.I.pageOf(surah, ayah),
+        highlight: ayah > 1 ? VerseRef(surah, ayah) : null,
       );
-    }
-
-    final header = Padding(
-      padding: const EdgeInsets.fromLTRB(26, 26, 26, 10),
-      child: Column(children: [
-        Row(children: [
-          Expanded(child: Container(height: 1, color: gold)),
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 8),
-            decoration: BoxDecoration(
-              color: night ? const Color(0xFF132A21) : C.goldPale,
-              borderRadius: BorderRadius.circular(40),
-              border: Border.all(color: gold),
-            ),
-            child: Column(children: [
-              Text('سورة ${s.name}',
-                  style: TextStyle(fontFamily: 'Amiri', fontSize: 28, fontWeight: FontWeight.w700, color: night ? C.goldLight : C.goldDeep)),
-              Text('${s.meccan ? 'مكية' : 'مدنية'} • ${arNum(s.uth.length)} آية',
-                  style: TextStyle(fontSize: 12, color: night ? const Color(0xFF9FB3AA) : C.muted)),
-            ]),
-          ),
-          Expanded(child: Container(height: 1, color: gold)),
-        ]),
-        if (hasBasmala)
-          Padding(
-            padding: const EdgeInsets.only(top: 14),
-            child: Text('بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ',
-                style: quranStyle.copyWith(fontSize: 27, color: night ? const Color(0xFFF3E7C1) : C.green)),
-          ),
-      ]),
-    );
-
-    final mushaf = CustomScrollView(
-      center: centerKey,
-      slivers: [
-        SliverList(
-          delegate: SliverChildBuilderDelegate(
-            (context, k) => k < start ? block(start - 1 - k) : header,
-            childCount: start == 0 ? 0 : start + 1,
-          ),
-        ),
-        SliverList(
-          key: centerKey,
-          delegate: SliverChildBuilderDelegate(
-            (context, k) => start == 0 ? (k == 0 ? header : block(k - 1)) : block(start + k),
-            childCount: chunks - start + (start == 0 ? 1 : 0),
-          ),
-        ),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(26, 16, 26, 26),
-            child: Row(children: [
-              Text('رواية حفص — Tanzil', style: TextStyle(fontSize: 12, color: night ? const Color(0xFF6E8279) : C.muted)),
-              const Spacer(),
-              if (widget.surah < 114)
-                TextButton.icon(
-                  icon: const Icon(Icons.arrow_back_rounded),
-                  label: Text('سورة ${d.surah(widget.surah + 1).name}'),
-                  onPressed: () => Navigator.pushReplacement(
-                      context, MaterialPageRoute(builder: (_) => SurahReader(surah: widget.surah + 1))),
-                ),
-            ]),
-          ),
-        ),
-      ],
-    );
-
-    final framed = Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 860),
-        child: Container(
-          margin: EdgeInsets.all(wide ? 22 : 8),
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: page,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: gold, width: 2),
-            boxShadow: [BoxShadow(color: Colors.black.withAlpha(night ? 110 : 30), blurRadius: 30, offset: const Offset(0, 14))],
-          ),
-          child: Container(
-            decoration: BoxDecoration(border: Border.all(color: gold.withAlpha(140))),
-            child: Stack(children: [
-              Positioned.fill(child: StarPattern(opacity: night ? 0.05 : 0.06, color: night ? C.goldLight : C.gold, cell: 72)),
-              mushaf,
-            ]),
-          ),
-        ),
-      ),
-    );
-
-    return Theme(
-      data: buildTheme(night ? Brightness.dark : Brightness.light),
-      child: Scaffold(
-        backgroundColor: bg,
-        appBar: AppBar(
-          backgroundColor: bg,
-          title: Text('سورة ${s.name}'),
-          actions: [
-            IconButton(
-              tooltip: night ? 'الوضع النهاري' : 'الوضع الليلي',
-              icon: Icon(night ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
-              onPressed: () => setState(AppState.I.toggleMushafNight),
-            ),
-            if (widget.ayah > 1)
-              IconButton(
-                tooltip: 'من بداية السورة',
-                icon: const Icon(Icons.vertical_align_top_rounded),
-                onPressed: () =>
-                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => SurahReader(surah: widget.surah))),
-              ),
-          ],
-        ),
-        body: wide
-            ? Row(children: [
-                Expanded(child: framed),
-                SizedBox(
-                  width: 360,
-                  child: selected == null
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Text('اضغط على أي آية لترى أين استُعملت ولنسخها أو مشاركتها.',
-                                textAlign: TextAlign.center, style: TextStyle(color: night ? const Color(0xFF9FB3AA) : C.muted)),
-                          ),
-                        )
-                      : ListView(children: [_VersePanel(ref: VerseRef(widget.surah, selected!), host: context)]),
-                ),
-              ])
-            : framed,
-      ),
-    );
-  }
 }
 
-class _VersePanel extends StatelessWidget {
+class VersePanel extends StatelessWidget {
   final VerseRef ref;
   final BuildContext host;
-  const _VersePanel({required this.ref, required this.host});
+  const VersePanel({super.key, required this.ref, required this.host});
   @override
   Widget build(BuildContext context) {
     final d = AppData.I;
@@ -377,6 +84,8 @@ class _VersePanel extends StatelessWidget {
             padding: EdgeInsets.all(12),
             child: Text('لم تُستعمل هذه الآية بعد في الردود أو التناقضات.'),
           ),
+        const SectionHeader('تدبّري وملاحظتي', icon: Icons.edit_note_rounded),
+        NoteSection('v:${ref.key}'),
       ]),
     );
   }

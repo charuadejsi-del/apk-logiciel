@@ -77,6 +77,11 @@ void main() {
     expect(d.byNarrator.isNotEmpty, isTrue);
     expect(d.timeline.length, greaterThanOrEqualTo(10));
     expect(d.surah(2).uth.length, 286);
+    expect(d.hasPages, isTrue);
+    expect(d.pageOf(2, 255), 42);
+    expect(d.pageOf(114, 1), 604);
+    expect(d.juzStarts.length, 30);
+    expect(d.pages.every((p) => p.isNotEmpty), isTrue);
     expect(d.parseRefQuery('2:255')?.ayah, 255);
     expect(d.parseRefQuery('البقرة 255')?.surah, 2);
     expect(d.searchQuran('اتخذوا هذا القرآن مهجورا').first.surah, 25);

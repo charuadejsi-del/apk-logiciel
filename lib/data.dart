@@ -59,7 +59,10 @@ class Surah {
   final List<String> ayat; // texte simple (copie, compatibilité)
   final List<String> uth; // rasm uthmani (affichage)
   final List<String> search;
-  Surah(this.n, this.name, this.meccan, this.ayat, this.uth, this.search);
+  final List<int> page, juz, quarter; // pagination de Médine (604 pages), juz, quart de hizb
+  final Set<int> sajda;
+  Surah(this.n, this.name, this.meccan, this.ayat, this.uth, this.search,
+      [this.page = const [], this.juz = const [], this.quarter = const [], this.sajda = const {}]);
 }
 
 class Topic {
@@ -226,6 +229,52 @@ class AppData {
     return ids.map((i) => hadithById[i]).whereType<Hadith>().toList();
   }
 
+  /// Pages du mushaf de Médine : versets de chaque page (index 0 = page 1).
+  late final List<List<VerseRef>> pages = () {
+    final p = List.generate(604, (_) => <VerseRef>[]);
+    for (final su in surahs) {
+      for (var i = 0; i < su.page.length; i++) {
+        final n = su.page[i];
+        if (n >= 1 && n <= 604) p[n - 1].add(VerseRef(su.n, i + 1));
+      }
+    }
+    return p;
+  }();
+
+  bool get hasPages => pages.first.isNotEmpty;
+
+  int pageOf(int s, int a) {
+    final su = surah(s);
+    if (su.page.isEmpty) return 1;
+    return su.page[(a - 1).clamp(0, su.page.length - 1).toInt()];
+  }
+
+  int juzOf(VerseRef r) {
+    final su = surah(r.surah);
+    return su.juz.isEmpty ? 1 : su.juz[r.ayah - 1];
+  }
+
+  int quarterOf(VerseRef r) {
+    final su = surah(r.surah);
+    return su.quarter.isEmpty ? 1 : su.quarter[r.ayah - 1];
+  }
+
+  /// Premier verset de chaque juz (1..30).
+  late final List<VerseRef> juzStarts = () {
+    final out = <VerseRef>[];
+    var last = 0;
+    for (final pg in pages) {
+      for (final r in pg) {
+        final j = juzOf(r);
+        if (j != last) {
+          out.add(r);
+          last = j;
+        }
+      }
+    }
+    return out;
+  }();
+
   /// Carte de liaison d'un hadith : chaque lien avec son type et son explication.
   List<HLink> hadithLinks(Hadith h) {
     final out = <HLink>[];
@@ -385,6 +434,10 @@ class AppData {
                 List<String>.from(s['ayat'] as List),
                 List<String>.from((s['u'] ?? s['ayat']) as List),
                 (s['clean'] as List).map((e) => norm(e as String)).toList(),
+                List<int>.from((s['p'] ?? const []) as List),
+                List<int>.from((s['j'] ?? const []) as List),
+                List<int>.from((s['q'] ?? const []) as List),
+                Set<int>.from((s['sj'] ?? const []) as List),
               ))
           .toList(),
       (c['topics'] as List).map((t) => Topic(t['id'], t['title'])).toList(),
