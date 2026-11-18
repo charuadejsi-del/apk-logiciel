@@ -87,6 +87,16 @@ void main() {
       }
       expect(f.source.isNotEmpty && f.url.startsWith('https://'), isTrue, reason: f.id);
     }
+    expect(d.smart.length, greaterThanOrEqualTo(20));
+    for (final t in d.smart) {
+      expect(t.side('y').isNotEmpty, isTrue, reason: t.id);
+      for (final v in t.verses) {
+        checkRef(v.ref, t.id);
+      }
+      for (final i in t.items) {
+        if (i.hid.isNotEmpty) expect(d.hadithById.containsKey(i.hid), isTrue);
+      }
+    }
     expect(d.hasPages, isTrue);
     expect(d.pageOf(2, 255), 42);
     expect(d.pageOf(114, 1), 604);

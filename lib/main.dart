@@ -91,7 +91,7 @@ class Shell extends StatelessWidget {
   const Shell({super.key});
 
   static const groups = <(String, List<String>)>[
-    ('', ['home', 'debate', 'cases']),
+    ('', ['home', 'smart', 'debate', 'cases']),
     ('المكتبة', ['contra', 'chains', 'hadiths', 'fatwas', 'objections', 'arguments']),
     ('الاستكشاف', ['narrators', 'timeline', 'quran', 'books']),
     ('أدواتي', ['training', 'favorites', 'mine', 'settings']),
@@ -167,6 +167,7 @@ class _NavPane extends StatelessWidget {
       'objections': d.objections.length,
       'arguments': d.arguments.length,
       'fatwas': d.fatwas.length,
+      'smart': d.smart.length,
       'narrators': d.byNarrator.length,
     };
     return Container(

@@ -98,6 +98,24 @@ fatwas=[]
 for (fid,title,who,mad,src,quote,isq,refs,com,rel,url) in getattr(C,'FATWAS',[]):
     for r in refs+rel: chk(r,fid)
     fatwas.append(dict(id=fid,title=title,scholar=who,madhab=mad,source=src,quote=quote,isQuote=isq,refs=refs,comment=com,related=rel,url=url))
+smart=[]; kids={k['id'] for k in cases} if cases and isinstance(cases[0],dict) else set()
+for (tid,title,qq,trig,yl,nl,items,verses,concl,rk) in getattr(C,'SMART',[]):
+    its=[]
+    for (side,b,num,kw,note) in items:
+        h=get(b,num,kw)
+        if not h:
+            errs.append(f'{tid} {b}:{num} «{kw}» introuvable -> {[x["num"] for x in find(b,kw,6)]}'); continue
+        g=grade(b,h)
+        if b not in('bukhari','muslim') and (not g or any(w in g for w in('ضعيف','موضوع','منكر','شاذ'))):
+            errs.append(f'{tid} {b}:{num} grade non retenu ({g})')
+        hid=next((x['id'] for x in hadiths if x['bookKey']==b and x['number']==str(num)),'')
+        its.append(dict(side=side,book=b,number=num,kw=kw,note=note,grade=g,hid=hid,
+                        text=re.sub(r'[‏‎]','',h['text']).strip() if b not in('bukhari','muslim') else ''))
+    for (r,_) in verses: chk(r,tid)
+    for k in rk:
+        if kids and k not in kids: errs.append(f'{tid}: dossier inconnu {k}')
+    smart.append(dict(id=tid,title=title,question=qq,triggers=trig,yes=yl,no=nl,items=its,
+                      verses=[dict(ref=r,note=n) for r,n in verses],conclusion=concl,cases=rk))
 if errs:
     print('\n'.join(errs)); sys.exit(1)
 content=dict(version=2,
@@ -106,6 +124,6 @@ content=dict(version=2,
   arguments=[dict(id=i,title=t,text=x,refs=r) for i,t,x,r in C.ARGUMENTS],
   hadithCategories=[dict(id=i,title=t) for i,t in C.HCATS],
   hadiths=hadiths, contradictions=contra, chains=chains, cases=cases,
-  timeline=[dict(h=a,g=b2,title=t,text=x) for a,b2,t,x in C.TIMELINE], fatwas=fatwas)
+  timeline=[dict(h=a,g=b2,title=t,text=x) for a,b2,t,x in C.TIMELINE], fatwas=fatwas, smart=smart)
 json.dump(content,open(f'{OUT}/content.json','w'),ensure_ascii=False,indent=0)
 print('OK', {k:len(v) for k,v in content.items() if isinstance(v,list)})

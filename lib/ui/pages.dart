@@ -8,6 +8,7 @@ import 'cases.dart';
 import 'extra.dart';
 import 'links.dart';
 import 'fatwas.dart';
+import 'smart.dart';
 
 /// Navigation globale entre sections.
 final ValueNotifier<String> shellNav = ValueNotifier('home');
@@ -16,6 +17,7 @@ final ValueNotifier<String> debateQuery = ValueNotifier('');
 const sectionInfo = <String, (String, IconData)>{
   'home': ('الرئيسية', Icons.home_rounded),
   'debate': ('المناظرة', Icons.bolt_rounded),
+  'smart': ('البحث الذكي', Icons.manage_search_rounded),
   'cases': ('ملفات القضايا', Icons.folder_special_rounded),
   'objections': ('الردود', Icons.forum_rounded),
   'contra': ('التناقضات', Icons.compare_arrows_rounded),
@@ -39,6 +41,7 @@ Widget pageFor(String id) => switch (id) {
       'cases' => const CasesPage(),
       'narrators' => const NarratorsPage(),
       'fatwas' => const FatwasPage(),
+      'smart' => const SmartSearchPage(),
       'timeline' => const TimelinePage(),
       'objections' => const ObjectionsPage(),
       'contra' => const ContradictionsPage(),
@@ -52,7 +55,7 @@ Widget pageFor(String id) => switch (id) {
       'mine' => const MinePage(),
       'settings' => const SettingsPage(),
       _ => const HubPage(title: 'المزيد', ids: [
-          'contra', 'chains', 'hadiths', 'fatwas', 'objections', 'arguments', 'narrators', 'timeline', 'books', 'training',
+          'smart', 'contra', 'chains', 'hadiths', 'fatwas', 'objections', 'arguments', 'narrators', 'timeline', 'books', 'training',
           'favorites', 'mine', 'settings'
         ]),
     };
@@ -89,6 +92,7 @@ class HubPage extends StatelessWidget {
           'settings' => 'الخط والمظهر وتحديث المحتوى',
           'narrators' => 'الصحابة الرواة وتناقضات رواياتهم',
           'fatwas' => 'أقوال فقهية موثقة من كتبها تخالف العقل والقرآن',
+          'smart' => 'اكتب موضوعاً فتظهر أحاديث نعم ولا وشهادة الصحابة والآيات',
           'timeline' => 'من نزول القرآن إلى تدوين الحديث',
           _ => '',
         };
@@ -168,7 +172,7 @@ class HomePage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
-                    onTap: () => wide ? showCommandPalette(context) : openSection(context, 'debate'),
+                    onTap: () => wide ? showCommandPalette(context) : openSection(context, 'smart'),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                       child: Row(children: [

@@ -176,6 +176,37 @@ class Fatwa {
         kBody = norm('$scholar $madhab $source $quote $comment');
 }
 
+/// Sujet intelligent : hadiths classés oui / non / témoignage des compagnons, versets et conclusion.
+class SmartItem {
+  final String side, book, kw, note, grade, hid, text;
+  final int number;
+  SmartItem(this.side, this.book, this.number, this.kw, this.note, this.grade, this.hid, this.text);
+  String get bookName => const {
+        'bukhari': 'صحيح البخاري',
+        'muslim': 'صحيح مسلم',
+        'abudawud': 'سنن أبي داود',
+        'tirmidhi': 'جامع الترمذي',
+        'ibnmajah': 'سنن ابن ماجه',
+        'nasai': 'سنن النسائي',
+      }[book] ??
+      book;
+  String get reference => '$bookName — رقم $number';
+}
+
+class SmartTopic {
+  final String id, title, question, yes, no, conclusion;
+  final List<String> triggers, cases;
+  final List<SmartItem> items;
+  final List<CaseVerse> verses;
+  final List<String> kTriggers;
+  final String kAll;
+  SmartTopic(this.id, this.title, this.question, this.triggers, this.yes, this.no, this.items, this.verses,
+      this.conclusion, this.cases)
+      : kTriggers = triggers.map(norm).toList(),
+        kAll = norm('$title $question ${items.map((i) => i.note).join(' ')}');
+  List<SmartItem> side(String s) => items.where((i) => i.side == s).toList();
+}
+
 class TimelineEvent {
   final String h, g, title, text;
   TimelineEvent(this.h, this.g, this.title, this.text);
@@ -205,6 +236,7 @@ class AppData {
   final List<CaseFile> cases;
   final List<TimelineEvent> timeline;
   List<Fatwa> fatwas = const [];
+  List<SmartTopic> smart = const [];
   late final Map<String, Fatwa> fatwaById = {for (final f in fatwas) f.id: f};
   final bool fromUpdate;
 
@@ -516,6 +548,23 @@ class AppData {
     a.fatwas = ((c['fatwas'] ?? const []) as List)
         .map((f) => Fatwa(f['id'], f['title'], f['scholar'] ?? '', f['madhab'] ?? '', f['source'] ?? '', f['quote'] ?? '',
             f['isQuote'] == true, _sl(f['refs']), f['comment'] ?? '', _sl(f['related']), f['url'] ?? ''))
+        .toList();
+    a.smart = ((c['smart'] ?? const []) as List)
+        .map((t) => SmartTopic(
+              t['id'],
+              t['title'],
+              t['question'] ?? '',
+              _sl(t['triggers']),
+              t['yes'] ?? 'نعم',
+              t['no'] ?? 'لا',
+              ((t['items'] ?? const []) as List)
+                  .map((i) => SmartItem(i['side'], i['book'], (i['number'] as num).toInt(), i['kw'] ?? '', i['note'] ?? '',
+                      i['grade'] ?? '', i['hid'] ?? '', i['text'] ?? ''))
+                  .toList(),
+              ((t['verses'] ?? const []) as List).map((v) => CaseVerse(v['ref'], v['note'] ?? '')).toList(),
+              t['conclusion'] ?? '',
+              _sl(t['cases']),
+            ))
         .toList();
     return a;
   }
