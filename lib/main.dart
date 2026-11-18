@@ -7,6 +7,7 @@ import 'state.dart';
 import 'ui/common.dart';
 import 'ui/pages.dart';
 import 'ui/extra.dart';
+import 'updater.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,7 +53,7 @@ class _HasbunaAppState extends State<HasbunaApp> {
               return Scaffold(body: Center(child: Text('خطأ في تحميل البيانات:\n${snap.error}')));
             }
             if (snap.connectionState != ConnectionState.done) return const Splash();
-            return const Shell();
+            return const StartupUpdateCheck(child: Shell());
           },
         ),
       ),

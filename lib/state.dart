@@ -30,6 +30,9 @@ class AppState extends ChangeNotifier {
   int mushafTheme = 0; // 0 ورقي، 1 أبيض، 2 ليلي
   double mushafFont = 25;
   int lastPage = 1;
+  bool autoUpdate = true;
+  int lastUpdateCheck = 0;
+  int skipBuild = 0;
   final Set<int> bookmarks = {};
 
   Future<void> load() async {
@@ -52,6 +55,9 @@ class AppState extends ChangeNotifier {
       mushafTheme = (p.getInt('mushafTheme') ?? 0).clamp(0, 2).toInt();
       mushafFont = (p.getDouble('mushafFont') ?? 25).clamp(16, 44).toDouble();
       lastPage = (p.getInt('lastPage') ?? 1).clamp(1, 604).toInt();
+      autoUpdate = p.getBool('autoUpdate') ?? true;
+      lastUpdateCheck = p.getInt('lastUpdateCheck') ?? 0;
+      skipBuild = p.getInt('skipBuild') ?? 0;
       bookmarks.addAll((p.getStringList('bookmarks') ?? const []).map(int.tryParse).whereType<int>());
     } catch (_) {
       // Pas de stockage disponible : on garde les valeurs par défaut.
@@ -73,6 +79,9 @@ class AppState extends ChangeNotifier {
     p.setInt('mushafTheme', mushafTheme);
     p.setDouble('mushafFont', mushafFont);
     p.setInt('lastPage', lastPage);
+    p.setBool('autoUpdate', autoUpdate);
+    p.setInt('lastUpdateCheck', lastUpdateCheck);
+    p.setInt('skipBuild', skipBuild);
     p.setStringList('bookmarks', bookmarks.map((e) => '$e').toList());
   }
 
@@ -97,6 +106,22 @@ class AppState extends ChangeNotifier {
   /// Sauvegarde silencieuse (sans reconstruire l'interface).
   void setLastPage(int v) {
     lastPage = v;
+    _save();
+  }
+
+  void setAutoUpdate(bool v) {
+    autoUpdate = v;
+    _save();
+    notifyListeners();
+  }
+
+  void setLastUpdateCheck(int v) {
+    lastUpdateCheck = v;
+    _save();
+  }
+
+  void setSkipBuild(int v) {
+    skipBuild = v;
     _save();
   }
 

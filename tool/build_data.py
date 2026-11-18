@@ -118,7 +118,7 @@ for (tid,title,qq,trig,yl,nl,items,verses,concl,rk) in getattr(C,'SMART',[]):
                       verses=[dict(ref=r,note=n) for r,n in verses],conclusion=concl,cases=rk))
 if errs:
     print('\n'.join(errs)); sys.exit(1)
-content=dict(version=2,
+content=dict(version=2, schema=3,
   topics=[dict(id=i,title=t) for i,t in C.TOPICS],
   objections=[dict(id=i,topic=t,objection=o,answer=a,refs=r) for i,t,o,a,r in C.OBJECTIONS],
   arguments=[dict(id=i,title=t,text=x,refs=r) for i,t,x,r in C.ARGUMENTS],

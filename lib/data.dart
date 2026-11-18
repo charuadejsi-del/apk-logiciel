@@ -422,17 +422,38 @@ class AppData {
     return File('${dir.path}${Platform.pathSeparator}content_update.json');
   }
 
+  static Future<File> _metaFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}${Platform.pathSeparator}content_update.build');
+  }
+
+  /// Version (build) du contenu en cours : celle du programme, ou celle d'une mise à jour plus récente.
+  static int contentBuild = appBuild;
+
+  /// Format de contenu compris par ce programme.
+  static const contentSchema = 3;
+
   static Future<void> load() async {
     final qRaw = await rootBundle.loadString('assets/data/quran.json');
     String cRaw = await rootBundle.loadString('assets/data/content.json');
     var fromUpdate = false;
+    contentBuild = appBuild;
     try {
       final f = await _overrideFile();
       if (await f.exists()) {
-        final txt = await f.readAsString();
-        parseContent(txt); // valide le format
-        cRaw = txt;
-        fromUpdate = true;
+        final m = await _metaFile();
+        final b = await m.exists() ? int.tryParse((await m.readAsString()).trim()) ?? 0 : 0;
+        if (b > appBuild) {
+          final txt = await f.readAsString();
+          parseContent(txt); // valide le format
+          cRaw = txt;
+          fromUpdate = true;
+          contentBuild = b;
+        } else {
+          // Le programme installé est plus récent que la mise à jour téléchargée : on l'oublie.
+          await f.delete();
+          if (await m.exists()) await m.delete();
+        }
       }
     } catch (_) {
       fromUpdate = false;
@@ -451,10 +472,12 @@ class AppData {
   }
 
   /// Installe un nouveau contenu téléchargé.
-  static Future<int> installUpdate(String raw) async {
+  static Future<int> installUpdate(String raw, {int build = 0}) async {
     final c = parseContent(raw);
     final f = await _overrideFile();
     await f.writeAsString(raw);
+    await (await _metaFile()).writeAsString('$build');
+    contentBuild = build;
     final qRaw = await rootBundle.loadString('assets/data/quran.json');
     I = _build(qRaw, raw, true);
     return (c['hadiths'] as List).length;
@@ -463,6 +486,8 @@ class AppData {
   static Future<void> resetUpdate() async {
     final f = await _overrideFile();
     if (await f.exists()) await f.delete();
+    final m = await _metaFile();
+    if (await m.exists()) await m.delete();
     await load();
   }
 
@@ -755,6 +780,9 @@ extension CaseText on AppData {
     return b.toString();
   }
 }
+
+/// Numéro de build injecté par la CI (--dart-define=BUILD=...). 0 en développement.
+const appBuild = int.fromEnvironment('BUILD', defaultValue: 0);
 
 class Brand {
   static const name = 'حسبنا كتاب الله';

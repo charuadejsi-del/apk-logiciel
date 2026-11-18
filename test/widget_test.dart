@@ -97,6 +97,7 @@ void main() {
         if (i.hid.isNotEmpty) expect(d.hadithById.containsKey(i.hid), isTrue);
       }
     }
+    expect(AppData.contentSchema, greaterThanOrEqualTo(3));
     expect(d.hasPages, isTrue);
     expect(d.pageOf(2, 255), 42);
     expect(d.pageOf(114, 1), 604);

@@ -1,12 +1,12 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../data.dart';
 import '../state.dart';
 import 'common.dart';
 import 'mushaf.dart';
+import '../updater.dart';
 
 // ───────────────────────── Coran ─────────────────────────
 
@@ -510,30 +510,7 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late final urlCtrl = TextEditingController(text: AppState.I.updateUrl);
   bool busy = false;
-
-  @override
-  void dispose() {
-    urlCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _update() async {
-    setState(() => busy = true);
-    try {
-      AppState.I.setUpdateUrl(urlCtrl.text);
-      final r = await http.get(Uri.parse(AppState.I.updateUrl)).timeout(const Duration(seconds: 30));
-      if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
-      final n = await AppData.installUpdate(r.body);
-      AppState.I.contentChanged();
-      if (mounted) toast(context, 'تم تحديث المحتوى: ${arNum(n)} حديثاً');
-    } catch (e) {
-      if (mounted) toast(context, 'تعذّر التحديث: $e');
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -571,26 +548,35 @@ class _SettingsPageState extends State<SettingsPage> {
               onSelectionChanged: (v) => st.setTheme(v.first),
             ),
           ),
-          const SectionHeader('تحديث المحتوى', icon: Icons.cloud_download_rounded),
+          const SectionHeader('التحديثات', icon: Icons.system_update_rounded),
           AppCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Text(
-                d.fromUpdate ? 'تستعمل الآن محتوى محدّثاً من الإنترنت.' : 'تستعمل المحتوى المدمج في البرنامج.',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+              Text('الإصدار المثبّت: ${Updater.versionLabel}', style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              Text(d.fromUpdate
+                  ? 'المحتوى: محدّث من الإنترنت (v2.0.${AppData.contentBuild}).'
+                  : 'المحتوى: المدمج في البرنامج.'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('التحقق التلقائي عند فتح البرنامج'),
+                subtitle: const Text('يحدّث المحتوى بصمت، ويخبرك إن صدر إصدار جديد من البرنامج.'),
+                value: st.autoUpdate,
+                onChanged: st.setAutoUpdate,
               ),
-              const SizedBox(height: 6),
-              const Text('يجلب البرنامج أحدث نسخة من الأحاديث والردود والتناقضات من الرابط التالي:'),
-              const SizedBox(height: 8),
-              TextField(controller: urlCtrl, textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 13)),
-              const SizedBox(height: 10),
               Row(children: [
                 Expanded(
                   child: FilledButton.icon(
                     icon: busy
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.sync_rounded),
-                    label: const Text('تحديث الآن'),
-                    onPressed: busy ? null : _update,
+                    label: const Text('تحقق الآن'),
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            setState(() => busy = true);
+                            await Updater.checkNow(context);
+                            if (mounted) setState(() => busy = false);
+                          },
                   ),
                 ),
                 if (d.fromUpdate) ...[
@@ -614,10 +600,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     borderRadius: BorderRadius.circular(12),
                     child: Image.asset('assets/brand/icon.png', width: 48, height: 48)),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(Brand.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
-                    Text('${Brand.tagline} — الإصدار 2.0'),
+                    const Text(Brand.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+                    Text('${Brand.tagline} — ${Updater.versionLabel}'),
                   ]),
                 ),
               ]),

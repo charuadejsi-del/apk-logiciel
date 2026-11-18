@@ -35,7 +35,7 @@ jobs:
       - run: dart run flutter_launcher_icons
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - run: flutter test
-      - run: flutter build apk --release
+      - run: flutter build apk --release --build-number=${{ github.run_number }} --dart-define=BUILD=${{ github.run_number }}
       - run: cp build/app/outputs/flutter-apk/app-release.apk hasbuna-android.apk
       - uses: actions/upload-artifact@v4
         with:
@@ -57,7 +57,7 @@ jobs:
         run: (Get-Content windows/runner/main.cpp) -replace 'L"munazir"', 'L"Hasbuna Kitab Allah"' | Set-Content windows/runner/main.cpp
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: flutter build windows --release
+      - run: flutter build windows --release --build-number=${{ github.run_number }} --dart-define=BUILD=${{ github.run_number }}
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath hasbuna-windows.zip
@@ -70,15 +70,24 @@ jobs:
     needs: [android, windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: Content and release notes
+        run: |
+          cp src/assets/data/content.json content.json
+          git -C src log -1 --pretty=%B | grep -v -e '^Co-Authored-By' -e '^Claude-Session' > notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.0.${{ github.run_number }}
           name: حسبنا كتاب الله v2.0.${{ github.run_number }} (${{ github.ref_name }})
           prerelease: ${{ github.ref_name != 'main' }}
           target_commitish: ${{ github.sha }}
+          body_path: notes.md
           files: |
             hasbuna-android.apk
             hasbuna-windows.zip
+            content.json
