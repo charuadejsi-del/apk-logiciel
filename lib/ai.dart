@@ -8,18 +8,59 @@ import 'state.dart';
 /// Fournisseur d'IA : format OpenAI (compatible) ou Anthropic.
 class AiProvider {
   final String id, name, base, defaultModel;
-  final bool anthropic;
-  const AiProvider(this.id, this.name, this.base, this.defaultModel, {this.anthropic = false});
+  final bool anthropic, free, json;
+  final List<String> preferred; // modèles préférés, dans l'ordre (gratuits d'abord)
+  final int maxHadith, clip, maxVerses; // taille de la requête adaptée aux limites du fournisseur
+  const AiProvider(this.id, this.name, this.base, this.defaultModel,
+      {this.anthropic = false,
+      this.free = false,
+      this.json = true,
+      this.preferred = const [],
+      this.maxHadith = 40,
+      this.clip = 600,
+      this.maxVerses = 18});
 }
 
 const aiProviders = [
-  AiProvider('gemini', 'Google Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-2.5-flash'),
-  AiProvider('anthropic', 'Claude (Anthropic)', 'https://api.anthropic.com/v1', 'claude-sonnet-5-5', anthropic: true),
-  AiProvider('openai', 'OpenAI', 'https://api.openai.com/v1', 'gpt-4.1-mini'),
-  AiProvider('groq', 'Groq', 'https://api.groq.com/openai/v1', 'llama-3.3-70b-versatile'),
-  AiProvider('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1', 'openai/gpt-4.1-mini'),
-  AiProvider('deepseek', 'DeepSeek', 'https://api.deepseek.com', 'deepseek-chat'),
+  AiProvider('groq', 'Groq', 'https://api.groq.com/openai/v1', 'llama-3.3-70b-versatile',
+      free: true,
+      preferred: [
+        'llama-3.3-70b-versatile',
+        'openai/gpt-oss-120b',
+        'qwen/qwen3-32b',
+        'meta-llama/llama-4-maverick-17b-128e-instruct',
+        'meta-llama/llama-4-scout-17b-16e-instruct',
+        'openai/gpt-oss-20b',
+        'llama-3.1-8b-instant',
+      ],
+      maxHadith: 18,
+      clip: 350,
+      maxVerses: 10),
+  AiProvider('gemini', 'Google Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-2.5-flash',
+      free: true,
+      preferred: ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest'],
+      maxHadith: 45,
+      clip: 700,
+      maxVerses: 20),
+  AiProvider('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1', 'meta-llama/llama-3.3-70b-instruct:free',
+      free: true,
+      json: false,
+      preferred: [
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'deepseek/deepseek-chat-v3-0324:free',
+        'qwen/qwen-2.5-72b-instruct:free',
+        'google/gemini-2.0-flash-exp:free',
+      ],
+      maxHadith: 25,
+      clip: 450,
+      maxVerses: 12),
+  AiProvider('anthropic', 'Claude (Anthropic)', 'https://api.anthropic.com/v1', 'claude-sonnet-5-5',
+      anthropic: true, json: false, preferred: ['claude-sonnet-5-5', 'claude-haiku-5-5']),
+  AiProvider('openai', 'OpenAI', 'https://api.openai.com/v1', 'gpt-4.1-mini', preferred: ['gpt-4.1-mini', 'gpt-4o-mini']),
+  AiProvider('deepseek', 'DeepSeek', 'https://api.deepseek.com', 'deepseek-chat', preferred: ['deepseek-chat']),
 ];
+
+AiProvider providerById(String id) => aiProviders.firstWhere((p) => p.id == id, orElse: () => aiProviders.first);
 
 /// Devine le fournisseur à partir du préfixe de la clé.
 String detectProvider(String key) {
@@ -41,41 +82,53 @@ class AiException implements Exception {
 
 class AiClient {
   final AiProvider p;
-  final String key, model;
-  AiClient(this.p, this.key, this.model);
+  final String key;
+  final List<String> models; // modèle principal puis modèles de repli
+  String get model => models.first;
+  AiClient(this.p, this.key, this.models);
 
   static AiClient? fromSettings() {
     final st = AppState.I;
     if (st.aiKey.isEmpty) return null;
-    final id = st.aiProvider.isNotEmpty ? st.aiProvider : detectProvider(st.aiKey);
-    final p = aiProviders.firstWhere((x) => x.id == id, orElse: () => aiProviders.first);
-    return AiClient(p, st.aiKey, st.aiModel.isEmpty ? p.defaultModel : st.aiModel);
+    final p = providerById(st.aiProvider.isNotEmpty ? st.aiProvider : detectProvider(st.aiKey));
+    final main = st.aiModel.isEmpty ? p.defaultModel : st.aiModel;
+    return AiClient(p, st.aiKey, [main, ...st.aiFallback.where((m) => m != main)]);
   }
 
   Map<String, String> get _headers => p.anthropic
       ? {'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'}
-      : {'Authorization': 'Bearer $key', 'content-type': 'application/json'};
+      : {
+          'Authorization': 'Bearer $key',
+          'content-type': 'application/json',
+          if (p.id == 'openrouter') 'X-Title': 'Hasbuna',
+        };
 
-  String _err(http.Response r) {
-    var msg = '';
+  static String _apiMsg(http.Response r) {
     try {
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       final e = j is List ? j.first['error'] : j['error'];
-      msg = e is Map ? '${e['message'] ?? ''}' : '$e';
-    } catch (_) {}
+      return e is Map ? '${e['message'] ?? ''}' : '${e ?? ''}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _err(http.Response r) {
+    final msg = _apiMsg(r);
     final hint = switch (r.statusCode) {
-      401 || 403 => 'المفتاح غير صالح أو لا يملك الصلاحية.',
-      404 => 'اسم النموذج غير موجود عند هذا المزوّد. اضغط «جلب النماذج» واختر واحداً.',
-      429 => 'تجاوزت الحد المسموح (أو انتهى الرصيد). انتظر قليلاً ثم أعد المحاولة.',
-      _ => 'خطأ من خادم الذكاء الاصطناعي.',
+      401 || 403 => 'المفتاح غير صالح أو موقوف. انسخه من جديد من موقع ${p.name} والصقه.',
+      402 => 'لا يوجد رصيد في حسابك عند ${p.name}.',
+      404 => 'النموذج غير متاح في حسابك.',
+      413 => 'الطلب أكبر من حدّ الخطة المجانية.',
+      429 => 'تجاوزت الحد المجاني عند ${p.name}. انتظر دقيقة (أو حتى الغد إن كان الحد اليومي) ثم أعد المحاولة.',
+      _ => 'خطأ من خادم ${p.name}.',
     };
     return '$hint (HTTP ${r.statusCode})${msg.isEmpty ? '' : '\n$msg'}';
   }
 
-  Future<String> chat(String system, String user) async {
-    final http.Response r;
+  Future<http.Response> _post(String model, String system, String user, bool json) {
     if (p.anthropic) {
-      r = await http
+      return http
           .post(Uri.parse('${p.base}/messages'),
               headers: _headers,
               body: jsonEncode({
@@ -87,26 +140,54 @@ class AiClient {
                 ],
               }))
           .timeout(const Duration(seconds: 120));
-    } else {
-      r = await http
-          .post(Uri.parse('${p.base}/chat/completions'),
-              headers: _headers,
-              body: jsonEncode({
-                'model': model,
-                'temperature': 0.2,
-                'messages': [
-                  {'role': 'system', 'content': system},
-                  {'role': 'user', 'content': user},
-                ],
-              }))
-          .timeout(const Duration(seconds: 120));
     }
-    if (r.statusCode != 200) throw AiException(_err(r));
-    final j = jsonDecode(utf8.decode(r.bodyBytes));
-    if (p.anthropic) {
-      return ((j['content'] as List).where((c) => c['type'] == 'text').map((c) => c['text']).join());
+    return http
+        .post(Uri.parse('${p.base}/chat/completions'),
+            headers: _headers,
+            body: jsonEncode({
+              'model': model,
+              'temperature': 0.2,
+              if (json) 'response_format': {'type': 'json_object'},
+              'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': user},
+              ],
+            }))
+        .timeout(const Duration(seconds: 120));
+  }
+
+  /// Envoie la requête ; en cas d'échec : sans JSON, attente courte, puis modèle de repli suivant.
+  Future<String> chat(String system, String user, {bool wantJson = false}) async {
+    http.Response? last;
+    for (final m in models.take(4)) {
+      var json = wantJson && p.json;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final r = await _post(m, system, user, json);
+        if (r.statusCode == 200) {
+          final j = jsonDecode(utf8.decode(r.bodyBytes));
+          final text = p.anthropic
+              ? (j['content'] as List).where((c) => c['type'] == 'text').map((c) => c['text']).join()
+              : '${j['choices']?[0]?['message']?['content'] ?? ''}';
+          if (text.trim().isNotEmpty) return text;
+          break; // réponse vide : modèle suivant
+        }
+        last = r;
+        if (r.statusCode == 401 || r.statusCode == 403 || r.statusCode == 402) throw AiException(_err(r));
+        if (r.statusCode == 400 && json) {
+          json = false; // le modèle n'accepte pas le mode JSON : on réessaie sans
+          continue;
+        }
+        if (r.statusCode == 429 && attempt == 0) {
+          final wait = int.tryParse(r.headers['retry-after'] ?? '') ?? 8;
+          if (wait <= 20) {
+            await Future.delayed(Duration(seconds: wait));
+            continue;
+          }
+        }
+        break; // 404, 413, 429 long, 5xx : modèle suivant
+      }
     }
-    return '${j['choices'][0]['message']['content'] ?? ''}';
+    throw AiException(last == null ? 'لا يوجد نموذج يعمل.' : _err(last));
   }
 
   Future<List<String>> listModels() async {
@@ -117,6 +198,67 @@ class AiClient {
     return list.map((m) => '${m['id'] ?? m['name'] ?? ''}'.replaceFirst('models/', '')).where((s) => s.isNotEmpty).toList()
       ..sort();
   }
+}
+
+/// Résultat de la configuration automatique.
+class AiSetup {
+  final bool ok;
+  final String message;
+  AiSetup(this.ok, this.message);
+}
+
+/// Configuration en un geste : fournisseur détecté, modèle gratuit choisi, test réel.
+Future<AiSetup> autoSetup(String key) async {
+  final st = AppState.I;
+  key = key.trim();
+  if (key.length < 20) return AiSetup(false, 'المفتاح قصير جداً. انسخه كاملاً.');
+  final id = detectProvider(key);
+  if (id.isEmpty && st.aiProvider.isEmpty) {
+    return AiSetup(false, 'لم أتعرّف على نوع المفتاح. اختر المزوّد من «خيارات متقدمة».');
+  }
+  final p = providerById(id.isNotEmpty ? id : st.aiProvider);
+  final probe = AiClient(p, key, [p.defaultModel]);
+
+  // 1) Modèles disponibles sur ce compte
+  List<String> available = [];
+  try {
+    available = await probe.listModels();
+  } on AiException catch (e) {
+    if (e.message.contains('HTTP 401') || e.message.contains('HTTP 403')) {
+      return AiSetup(false, e.message);
+    }
+  } catch (_) {
+    return AiSetup(false, 'تعذّر الاتصال بـ ${p.name}. تأكد من الإنترنت.');
+  }
+
+  // 2) Choix : modèles préférés présents sur le compte, puis (OpenRouter) tout modèle « :free »
+  final avail = available.toSet();
+  final chosen = <String>[
+    ...p.preferred.where((m) => avail.isEmpty || avail.contains(m)),
+    if (p.id == 'openrouter') ...available.where((m) => m.endsWith(':free') && !p.preferred.contains(m)),
+  ];
+  if (chosen.isEmpty) chosen.addAll(p.preferred.isEmpty ? [p.defaultModel] : p.preferred);
+
+  // 3) Test réel, avec repli automatique
+  final c = AiClient(p, key, chosen);
+  for (var i = 0; i < chosen.length && i < 5; i++) {
+    final cl = AiClient(p, key, [chosen[i]]);
+    try {
+      await cl.chat('أجب بكلمة واحدة.', 'قل: يعمل');
+      final fb = chosen.where((m) => m != chosen[i]).take(3).toList();
+      final msg = '✅ جاهز — ${p.name} · ${chosen[i]}${p.free ? ' (مجاني)' : ' — ⚠️ مزوّد مدفوع: كل بحث يُخصم من رصيدك'}';
+      st.setAi(key: key, provider: p.id, model: chosen[i], fallback: fb, status: msg);
+      return AiSetup(true, msg);
+    } on AiException catch (e) {
+      if (e.message.contains('HTTP 401') || e.message.contains('HTTP 403') || e.message.contains('HTTP 402')) {
+        return AiSetup(false, e.message);
+      }
+      if (i == chosen.length - 1 || i == 4) return AiSetup(false, e.message);
+    } catch (_) {
+      return AiSetup(false, 'تعذّر الاتصال بـ ${p.name}. تأكد من الإنترنت.');
+    }
+  }
+  return AiSetup(false, 'لا يوجد نموذج يعمل بهذا المفتاح (${c.models.length} نموذجاً جُرّب).');
 }
 
 /// Extrait le premier objet JSON d'une réponse (tolère ```json … ```).
@@ -186,7 +328,7 @@ Future<AiResult> aiResearch(String question, void Function(String) progress) asy
   final d = AppData.I;
 
   progress('١/٤ فهم السؤال وتحويله إلى كلمات بحث…');
-  final j1 = extractJson(await ai.chat(_sys1, question));
+  final j1 = extractJson(await ai.chat(_sys1, question, wantJson: true));
   final claim = '${j1['claim'] ?? question}';
   final hq = ((j1['hadith_queries'] ?? const []) as List)
       .map((q) => (q is List ? q : [q]).map((w) => norm('$w')).where((w) => w.length > 1).toList())
@@ -203,7 +345,7 @@ Future<AiResult> aiResearch(String question, void Function(String) progress) asy
     final prefix = b[0];
     for (final q in hq) {
       var n = 0;
-      for (var i = 0; i < list.length && n < 12; i++) {
+      for (var i = 0; i < list.length && n < (ai.p.maxHadith < 25 ? 6 : 12); i++) {
         final h = list[i];
         if (q.every(h.key.contains)) {
           final id = '$prefix$i';
@@ -221,18 +363,21 @@ Future<AiResult> aiResearch(String question, void Function(String) progress) asy
     }
   }
   final hadiths = cands.values.toList()..sort((a, b) => b.score.compareTo(a.score));
-  final top = [...hadiths.take(45), ...(verses.values.toList()..sort((a, b) => b.score.compareTo(a.score))).take(20)];
+  final top = [
+    ...hadiths.take(ai.p.maxHadith),
+    ...(verses.values.toList()..sort((a, b) => b.score.compareTo(a.score))).take(ai.p.maxVerses)
+  ];
   if (top.isEmpty) {
     throw AiException('لم يجد البحث نصوصاً مطابقة في الكتب. أعد صياغة السؤال بكلمات أخرى.');
   }
 
   progress('٣/٤ قراءة ${top.length} نصاً وتصنيفها…');
-  String clip(String t) => t.length <= 700 ? t : '…${t.substring(t.length - 700)}';
+  String clip(String t) => t.length <= ai.p.clip ? t : '…${t.substring(t.length - ai.p.clip)}';
   final buf = StringBuffer('السؤال: $question\nالدعوى: $claim\n\nالنصوص:\n');
   for (final c in top) {
     buf.writeln('[${c.id}] (${c.label}) ${clip(c.fullText)}');
   }
-  final j2 = extractJson(await ai.chat(_sys2, buf.toString()));
+  final j2 = extractJson(await ai.chat(_sys2, buf.toString(), wantJson: true));
   final byId = {for (final c in top) c.id: c};
 
   progress('٤/٤ التحقق من المعرّفات…');

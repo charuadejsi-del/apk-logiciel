@@ -30,6 +30,8 @@ class AppState extends ChangeNotifier {
   String aiKey = '';
   String aiModel = '';
   bool aiTabari = false;
+  List<String> aiFallback = [];
+  String aiStatus = '';
   bool mushafNight = true;
   int mushafTheme = 0; // 0 ورقي، 1 أبيض، 2 ليلي
   double mushafFont = 25;
@@ -59,6 +61,8 @@ class AppState extends ChangeNotifier {
       aiKey = p.getString('aiKey') ?? '';
       aiModel = p.getString('aiModel') ?? '';
       aiTabari = p.getBool('aiTabari') ?? false;
+      aiFallback = p.getStringList('aiFallback') ?? [];
+      aiStatus = p.getString('aiStatus') ?? '';
       mushafNight = p.getBool('mushafNight') ?? true;
       mushafTheme = (p.getInt('mushafTheme') ?? 0).clamp(0, 2).toInt();
       mushafFont = (p.getDouble('mushafFont') ?? 25).clamp(16, 44).toDouble();
@@ -87,6 +91,8 @@ class AppState extends ChangeNotifier {
     p.setString('aiKey', aiKey);
     p.setString('aiModel', aiModel);
     p.setBool('aiTabari', aiTabari);
+    p.setStringList('aiFallback', aiFallback);
+    p.setString('aiStatus', aiStatus);
     p.setBool('mushafNight', mushafNight);
     p.setInt('mushafTheme', mushafTheme);
     p.setDouble('mushafFont', mushafFont);
@@ -137,7 +143,9 @@ class AppState extends ChangeNotifier {
     _save();
   }
 
-  void setAi({String? provider, String? key, String? model, bool? tabari}) {
+  void setAi({String? provider, String? key, String? model, bool? tabari, List<String>? fallback, String? status}) {
+    if (fallback != null) aiFallback = fallback;
+    if (status != null) aiStatus = status;
     if (provider != null) aiProvider = provider;
     if (key != null) aiKey = key.trim();
     if (model != null) aiModel = model.trim();

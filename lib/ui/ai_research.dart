@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../ai.dart';
 import '../data.dart';
@@ -185,7 +188,7 @@ class _PickCard extends StatelessWidget {
   }
 }
 
-/// Réglages : clé, fournisseur (détecté), modèle, test.
+/// Réglages : on colle la clé, tout le reste est automatique.
 class AiSettingsCard extends StatefulWidget {
   const AiSettingsCard({super.key});
   @override
@@ -196,44 +199,48 @@ class _AiSettingsCardState extends State<AiSettingsCard> {
   late final keyCtrl = TextEditingController(text: AppState.I.aiKey);
   late final modelCtrl = TextEditingController(text: AppState.I.aiModel);
   bool hide = true, busy = false;
+  Timer? _deb;
   List<String> models = [];
-  String? status;
+  String? advStatus;
 
   @override
   void dispose() {
+    _deb?.cancel();
     keyCtrl.dispose();
     modelCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _do(Future<void> Function(AiClient) f) async {
-    final ai = AiClient.fromSettings();
-    if (ai == null) {
-      setState(() => status = 'ألصق المفتاح أولاً.');
-      return;
-    }
-    setState(() {
-      busy = true;
-      status = null;
+  Future<void> _setup() async {
+    final k = keyCtrl.text.trim();
+    if (k.isEmpty) return;
+    setState(() => busy = true);
+    AppState.I.setAi(key: k, status: '');
+    final r = await autoSetup(k);
+    if (!mounted) return;
+    if (!r.ok) AppState.I.setAi(status: '❌ ${r.message}');
+    modelCtrl.text = AppState.I.aiModel;
+    setState(() => busy = false);
+  }
+
+  void _changed(String v) {
+    _deb?.cancel();
+    _deb = Timer(const Duration(milliseconds: 900), () {
+      if (mounted && v.trim().length >= 20) _setup();
     });
-    try {
-      await f(ai);
-    } catch (e) {
-      status = '$e';
-    }
-    if (mounted) setState(() => busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final st = AppState.I;
     final s = Theme.of(context).colorScheme;
-    final detected = detectProvider(st.aiKey);
-    final provider = st.aiProvider.isNotEmpty ? st.aiProvider : (detected.isEmpty ? 'gemini' : detected);
-    final prov = aiProviders.firstWhere((p) => p.id == provider, orElse: () => aiProviders.first);
+    final prov = providerById(st.aiProvider.isNotEmpty ? st.aiProvider : (detectProvider(st.aiKey).isEmpty ? 'groq' : detectProvider(st.aiKey)));
+    final ok = st.aiStatus.startsWith('✅');
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('مفتاحك يُحفظ في هذا الجهاز فقط، ولا يُرسل إلا إلى مزوّد الذكاء الاصطناعي عند البحث.',
+        const Text('ألصق مفتاحك فقط، والبرنامج يختار النموذج المجاني ويختبره تلقائياً.',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        Text('المفاتيح المجانية: Groq (console.groq.com) أو Gemini (aistudio.google.com) أو OpenRouter.',
             style: TextStyle(fontSize: 12.5, color: s.onSurfaceVariant)),
         const SizedBox(height: 10),
         TextField(
@@ -245,89 +252,115 @@ class _AiSettingsCardState extends State<AiSettingsCard> {
           decoration: InputDecoration(
             labelText: 'مفتاح API',
             border: const OutlineInputBorder(),
-            isDense: true,
-            suffixIcon: IconButton(
-                icon: Icon(hide ? Icons.visibility_rounded : Icons.visibility_off_rounded),
-                onPressed: () => setState(() => hide = !hide)),
-          ),
-          onChanged: (v) {
-            final d = detectProvider(v);
-            st.setAi(key: v, provider: d.isEmpty ? null : d);
-          },
-        ),
-        const SizedBox(height: 10),
-        DropdownButtonFormField<String>(
-          key: ValueKey(prov.id),
-          initialValue: prov.id,
-          decoration: InputDecoration(
-            labelText: detected.isNotEmpty ? 'المزوّد (تعرّف عليه البرنامج من المفتاح)' : 'المزوّد',
-            border: const OutlineInputBorder(),
-            isDense: true,
-          ),
-          items: [for (final p in aiProviders) DropdownMenuItem(value: p.id, child: Text(p.name))],
-          onChanged: (v) => setState(() => st.setAi(provider: v)),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: modelCtrl,
-          textDirection: TextDirection.ltr,
-          decoration: InputDecoration(
-            labelText: 'النموذج (فارغ = ${prov.defaultModel})',
-            border: const OutlineInputBorder(),
-            isDense: true,
-          ),
-          onChanged: (v) => st.setAi(model: v),
-        ),
-        if (models.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 150,
-            child: ListView(children: [
-              for (final m in models)
-                ListTile(
-                  dense: true,
-                  title: Text(m, textDirection: TextDirection.ltr),
-                  selected: m == st.aiModel,
-                  onTap: () => setState(() {
-                    modelCtrl.text = m;
-                    st.setAi(model: m);
+            suffixIcon: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                  tooltip: 'لصق',
+                  icon: const Icon(Icons.content_paste_rounded),
+                  onPressed: () async {
+                    final d = await Clipboard.getData('text/plain');
+                    final t = d?.text?.trim() ?? '';
+                    if (t.isNotEmpty) {
+                      keyCtrl.text = t;
+                      _setup();
+                    }
                   }),
-                ),
+              IconButton(
+                  icon: Icon(hide ? Icons.visibility_rounded : Icons.visibility_off_rounded),
+                  onPressed: () => setState(() => hide = !hide)),
             ]),
           ),
-        ],
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('شمل تاريخ الطبري في البحث'),
-          subtitle: const Text('أخباره غير مصحّحة؛ معطّل افتراضياً.'),
-          value: st.aiTabari,
-          onChanged: (v) => setState(() => st.setAi(tabari: v)),
+          onChanged: _changed,
+          onSubmitted: (_) => _setup(),
         ),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          OutlinedButton.icon(
-            icon: const Icon(Icons.list_rounded),
-            label: const Text('جلب النماذج'),
-            onPressed: busy
-                ? null
-                : () => _do((ai) async {
-                      models = await ai.listModels();
-                      status = '${arNum(models.length)} نموذجاً متاحاً. اختر واحداً.';
-                    }),
+        const SizedBox(height: 10),
+        if (busy)
+          const Row(children: [
+            SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 10),
+            Expanded(child: Text('جارٍ الإعداد: التعرّف على المزوّد، اختيار نموذج مجاني، اختبار…')),
+          ])
+        else if (st.aiStatus.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: (ok ? const Color(0xFF2E7D32) : s.error).withAlpha(28),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(st.aiStatus, style: const TextStyle(height: 1.5)),
           ),
-          FilledButton.icon(
-            icon: busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.bolt_rounded),
-            label: const Text('اختبار'),
-            onPressed: busy
-                ? null
-                : () => _do((ai) async {
-                      final r = await ai.chat('أجب بكلمة واحدة.', 'قل: يعمل');
-                      status = '✅ يعمل (${ai.p.name} — ${ai.model}): ${r.trim()}';
-                    }),
+        if (!busy && st.aiKey.isNotEmpty)
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(icon: const Icon(Icons.refresh_rounded), label: const Text('إعادة الإعداد'), onPressed: _setup),
           ),
-        ]),
-        if (status != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(status!)),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('خيارات متقدمة'),
+          children: [
+            DropdownButtonFormField<String>(
+              key: ValueKey(prov.id),
+              initialValue: prov.id,
+              decoration: const InputDecoration(labelText: 'المزوّد', border: OutlineInputBorder(), isDense: true),
+              items: [
+                for (final p in aiProviders)
+                  DropdownMenuItem(value: p.id, child: Text('${p.name}${p.free ? ' — مجاني' : ' — مدفوع'}')),
+              ],
+              onChanged: (v) => setState(() => st.setAi(provider: v, model: '', fallback: [])),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: modelCtrl,
+              textDirection: TextDirection.ltr,
+              decoration: InputDecoration(
+                  labelText: 'النموذج (فارغ = ${prov.defaultModel})', border: const OutlineInputBorder(), isDense: true),
+              onChanged: (v) => st.setAi(model: v),
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                icon: const Icon(Icons.list_rounded),
+                label: const Text('عرض النماذج المتاحة'),
+                onPressed: () async {
+                  final ai = AiClient.fromSettings();
+                  if (ai == null) return;
+                  try {
+                    models = await ai.listModels();
+                    advStatus = null;
+                  } catch (e) {
+                    advStatus = '$e';
+                  }
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            if (advStatus != null) Text(advStatus!),
+            if (models.isNotEmpty)
+              SizedBox(
+                height: 150,
+                child: ListView(children: [
+                  for (final m in models)
+                    ListTile(
+                      dense: true,
+                      title: Text(m, textDirection: TextDirection.ltr),
+                      selected: m == st.aiModel,
+                      onTap: () => setState(() {
+                        modelCtrl.text = m;
+                        st.setAi(model: m);
+                      }),
+                    ),
+                ]),
+              ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('شمل تاريخ الطبري في البحث'),
+              subtitle: const Text('أخباره غير مصحّحة؛ معطّل افتراضياً.'),
+              value: st.aiTabari,
+              onChanged: (v) => setState(() => st.setAi(tabari: v)),
+            ),
+          ],
+        ),
+        Text('مفتاحك يُحفظ في هذا الجهاز فقط، ولا يُرسل إلا إلى مزوّد الذكاء الاصطناعي.',
+            style: TextStyle(fontSize: 12, color: s.onSurfaceVariant)),
       ]),
     );
   }
