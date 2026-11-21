@@ -4,6 +4,7 @@ import '../ai.dart';
 import '../data.dart';
 import '../state.dart';
 import 'common.dart';
+import 'pages.dart';
 import 'smart.dart';
 
 /// Page de recherche par IA : étapes en direct, puis résultats vérifiés.
