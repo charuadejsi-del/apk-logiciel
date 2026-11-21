@@ -237,6 +237,13 @@ Future<AiSetup> autoSetup(String key) async {
     ...p.preferred.where((m) => avail.isEmpty || avail.contains(m)),
     if (p.id == 'openrouter') ...available.where((m) => m.endsWith(':free') && !p.preferred.contains(m)),
   ];
+  if (chosen.isEmpty && available.isNotEmpty) {
+    // Aucun modèle préféré sur ce compte : modèles de texte disponibles (sans audio, image, embeddings, garde).
+    final bad = RegExp(r'whisper|tts|embed|guard|vision|image|audio|moderation|distil|playai|orpheus|compound', caseSensitive: false);
+    final text = available.where((m) => !bad.hasMatch(m)).toList()
+      ..sort((a, b) => (b.contains('70b') || b.contains('flash') ? 1 : 0).compareTo(a.contains('70b') || a.contains('flash') ? 1 : 0));
+    chosen.addAll(p.id == 'openrouter' ? text.where((m) => m.endsWith(':free')) : text);
+  }
   if (chosen.isEmpty) chosen.addAll(p.preferred.isEmpty ? [p.defaultModel] : p.preferred);
 
   // 3) Test réel, avec repli automatique
