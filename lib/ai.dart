@@ -277,16 +277,17 @@ Map<String, dynamic> extractJson(String s) {
 
 // ───────────────────────── Recherche assistée ─────────────────────────
 
-/// Candidat trouvé localement : hadith d'un livre ou verset.
+/// Candidat trouvé localement : hadith d'un livre, hadith annoté, ou verset.
 class Candidate {
-  final String id; // b12, m40, t7, q2:255
-  final String book; // bukhari, muslim, tabari, quran
+  final String id; // b12, m40, t7, h55, q2:255
+  final String book; // bukhari, muslim, tabari, annot, quran
   final BookHadith? h;
   final VerseRef? v;
+  final String? labelOverride, note;
   int score = 0;
-  Candidate(this.id, this.book, {this.h, this.v});
+  Candidate(this.id, this.book, {this.h, this.v, this.labelOverride, this.note});
 
-  String get label => v != null ? AppData.I.refLabel(v!) : '${Books.names[book]} — ${h!.ref}';
+  String get label => labelOverride ?? (v != null ? AppData.I.refLabel(v!) : '${Books.names[book] ?? book} — ${h!.ref}');
   String get fullText => v != null ? AppData.I.verseText(v!) : h!.text;
 }
 
@@ -296,111 +297,196 @@ class AiPick {
   AiPick(this.c, this.why);
 }
 
+class AiUnderstanding {
+  final String understood, claim, yes, no;
+  AiUnderstanding(this.understood, this.claim, this.yes, this.no);
+}
+
 class AiResult {
   final String question, claim, summary;
   final List<List<String>> queries;
   final List<AiPick> answer, contra, verses;
-  final int searched;
-  AiResult(this.question, this.claim, this.summary, this.queries, this.answer, this.contra, this.verses, this.searched);
+  final int searched, rounds;
+  AiResult(this.question, this.claim, this.summary, this.queries, this.answer, this.contra, this.verses, this.searched,
+      this.rounds);
 }
 
-const _sys1 = '''أنت باحث في الحديث والقرآن. مهمتك تحويل سؤال المستخدم إلى كلمات بحث نصية تُستعمل للبحث الحرفي في متون صحيح البخاري وصحيح مسلم وفي القرآن.
-أجب بـ JSON فقط بهذا الشكل:
-{"claim": "الدعوى المسؤول عنها في جملة واحدة",
- "hadith_queries": [["كلمة","كلمة"], ...],
- "quran_queries": ["كلمة أو عبارة", ...]}
-قواعد:
-- من 4 إلى 8 استعلامات للحديث. كل استعلام قائمة من كلمة إلى ثلاث كلمات يجب أن تجتمع في المتن، بلا تشكيل، بألفاظ الحديث القديمة كما ترد في المتون (مثل: الغيب، يعلم، ادري، الساعه).
-- غطِّ الجانبين: ألفاظ الروايات التي تثبت الدعوى وألفاظ الروايات التي تنفيها.
-- من 3 إلى 6 استعلامات للقرآن بألفاظ قرآنية بلا تشكيل.
-- لا تكتب أي نص خارج JSON.''';
+/// Contexte permanent : à quoi sert l'application et qui pose les questions.
+const _ctx = 'سياق ثابت: هذا برنامج «حسبنا كتاب الله»، أداة مناظرة لمسلم قرآني يكتفي بالقرآن، يناظر أهل الحديث.\n'
+    'المستخدم يكتب أسئلة قصيرة جداً أو بالعامية الجزائرية أو بالفرنسية المخلوطة أو بأخطاء إملائية.\n'
+    'هدفه دائماً: إيجاد روايات البخاري ومسلم المتعلقة بالمسألة، وما يناقضها من روايات أخرى، والآيات التي تخالفها.\n'
+    'افهم قصده لا ألفاظه: «الإيمان غصبا» تعني الإكراه على الدين بالقتال، «يقتلو اللي يخرج من الدين» تعني حد الردة، '
+    '«عايشة شحال كان عمرها» تعني سن عائشة عند الزواج.\n';
 
-const _sys2 = '''أنت باحث دقيق في نقد الحديث بمنهج عرضه على القرآن. ستُعطى سؤالاً وقائمة نصوص مرقّمة بمعرّفات (b… للبخاري، m… لمسلم، t… للطبري، q… للآيات).
-صنّف النصوص ذات الصلة فقط، وأجب بـ JSON فقط:
-{"answer": [{"id": "...", "why": "..."}],
- "contra": [{"id": "...", "why": "..."}],
- "verses": [{"id": "...", "why": "..."}],
- "summary": "خلاصة من سطرين أو ثلاثة"}
-- answer: روايات تجيب عن السؤال وتثبت الدعوى.
-- contra: روايات تناقض روايات answer أو تنفي الدعوى.
-- verses: آيات تخالف ما تقوله روايات answer، أو تبيّن موقف القرآن من المسألة.
-- why: جملة عربية واحدة قصيرة تشرح وجه الإثبات أو التناقض، معتمدة على النص المعطى فقط.
-- استعمل المعرّفات الموجودة في القائمة فقط، ولا تخترع نصاً ولا رقماً. اترك القائمة فارغة إن لم تجد شيئاً.
-- لا تكتب أي نص خارج JSON.''';
+const _sysU = '${_ctx}مهمتك الآن: فهم سؤال المستخدم فقط. أجب بـ JSON فقط:\n'
+    '{"understood": "إعادة صياغة السؤال بالعربية الفصحى الواضحة كما يقصده المستخدم، في جملة أو جملتين",\n'
+    ' "claim": "الدعوى المسؤول عنها في جملة قصيرة",\n'
+    ' "yes_side": "ما الذي تقوله الروايات المثبتة",\n'
+    ' "no_side": "ما الذي ينفيها من روايات أو آيات"}';
 
-/// Lance la recherche complète. [progress] reçoit les étapes à afficher.
-Future<AiResult> aiResearch(String question, void Function(String) progress) async {
+const _sysQ = '${_ctx}أنت عالم بمتون صحيحي البخاري ومسلم. للسؤال المعطى:\n'
+    '1) تذكّر الأحاديث الحقيقية التي تعرفها في هذا المعنى من الجانبين (المثبتة والنافية)، حتى 12 حديثاً.\n'
+    '2) لكل حديث أعطِ من 1 إلى 3 عبارات قصيرة (كلمتان إلى أربع كلمات) منقولة حرفياً من متنه كما ترد في الكتب، بلا تشكيل، مميزة له.\n'
+    '   مثال: حديث «أمرت أن أقاتل الناس حتى يقولوا لا إله إلا الله» ← عباراته: "اقاتل الناس"، "حتى يشهدوا".\n'
+    '   لا تستعمل ألفاظ السؤال الحديثة (يجبر، قسر، غصب…) إلا إن وردت فعلاً في المتن.\n'
+    '3) أعطِ 3 إلى 6 عبارات قرآنية بألفاظ الآيات المناسبة.\n'
+    'أجب بـ JSON فقط:\n'
+    '{"hadiths": [{"about": "وصف قصير للحديث", "side": "yes أو no", "phrases": ["...", "..."]}],\n'
+    ' "quran": ["...", "..."]}';
+
+const _sys2 = '${_ctx}أنت باحث دقيق في نقد الحديث بعرضه على القرآن. ستُعطى السؤال كما فهمناه وقائمة نصوص بمعرّفات\n'
+    '(b… البخاري، m… مسلم، t… الطبري، h… أحاديث مشروحة في البرنامج، q… آيات).\n'
+    'صنّف النصوص ذات الصلة فقط، وأجب بـ JSON فقط:\n'
+    '{"answer": [{"id": "...", "why": "..."}],\n'
+    ' "contra": [{"id": "...", "why": "..."}],\n'
+    ' "verses": [{"id": "...", "why": "..."}],\n'
+    ' "summary": "خلاصة من سطرين مبنية على النصوص المختارة فقط"}\n'
+    '- answer: روايات تثبت الدعوى أو تجيب عن السؤال.\n'
+    '- contra: روايات تناقض روايات answer أو تنفي الدعوى.\n'
+    '- verses: آيات تخالف روايات answer أو تبيّن موقف القرآن.\n'
+    '- why: جملة عربية واحدة قصيرة تشرح وجه الإثبات أو التناقض من النص المعطى.\n'
+    '- لا تستعمل إلا المعرّفات المعطاة، ولا تخترع نصاً ولا رقماً. لا تقل «لا توجد روايات» عن شيء لم يُعطَ لك.';
+
+/// Étape 1 : comprendre l'intention (montrée à l'utilisateur pour validation).
+Future<AiUnderstanding> aiUnderstand(String question) async {
+  final ai = AiClient.fromSettings();
+  if (ai == null) throw AiException('أضف مفتاح الذكاء الاصطناعي من الإعدادات أولاً.');
+  final j = extractJson(await ai.chat(_sysU, question, wantJson: true));
+  return AiUnderstanding('${j['understood'] ?? question}', '${j['claim'] ?? ''}', '${j['yes_side'] ?? ''}',
+      '${j['no_side'] ?? ''}');
+}
+
+/// Étapes suivantes : rappel des hadiths, recherche locale, classement, second tour si rien.
+Future<AiResult> aiResearch(String question, String understood, void Function(String) progress) async {
   final ai = AiClient.fromSettings();
   if (ai == null) throw AiException('أضف مفتاح الذكاء الاصطناعي من الإعدادات أولاً.');
   final d = AppData.I;
-
-  progress('١/٤ فهم السؤال وتحويله إلى كلمات بحث…');
-  final j1 = extractJson(await ai.chat(_sys1, question, wantJson: true));
-  final claim = '${j1['claim'] ?? question}';
-  final hq = ((j1['hadith_queries'] ?? const []) as List)
-      .map((q) => (q is List ? q : [q]).map((w) => norm('$w')).where((w) => w.length > 1).toList())
-      .where((q) => q.isNotEmpty)
-      .take(8)
-      .toList();
-  final qq = ((j1['quran_queries'] ?? const []) as List).map((w) => '$w').where((w) => w.trim().isNotEmpty).take(6).toList();
-
-  progress('٢/٤ البحث في نصوص الكتب داخل البرنامج…');
   final books = <String>['bukhari', 'muslim', if (AppState.I.aiTabari) 'tabari'];
+  final lists = {for (final b in books) b: await Books.load(b)};
+  final perPhrase = ai.p.maxHadith < 25 ? 2 : 4;
   final cands = <String, Candidate>{};
-  for (final b in books) {
-    final list = await Books.load(b);
-    final prefix = b[0];
-    for (final q in hq) {
-      var n = 0;
-      for (var i = 0; i < list.length && n < (ai.p.maxHadith < 25 ? 6 : 12); i++) {
-        final h = list[i];
-        if (q.every(h.key.contains)) {
-          final id = '$prefix$i';
-          (cands[id] ??= Candidate(id, b, h: h)).score += 1;
-          n++;
+  final verses = <String, Candidate>{};
+  final allQueries = <List<String>>[];
+
+  // Contenu déjà vérifié de l'application (hadiths annotés, contradictions) correspondant au sens.
+  void addCurated(String text) {
+    for (final hit in d.searchAll(text).take(12)) {
+      final ids = <String>[];
+      if (hit.kind == 'h') ids.add(hit.id);
+      if (hit.kind == 'c') {
+        final c = d.contraById[hit.id];
+        if (c != null) {
+          ids.addAll([...c.a, ...c.b].where((x) => !isVerseRef(x)));
+          for (final r in [...c.a, ...c.b].where(isVerseRef)) {
+            final v = VerseRef.parse(r);
+            (verses['q${v.key}'] ??= Candidate('q${v.key}', 'quran', v: v)).score += 2;
+          }
         }
+      }
+      for (final id in ids) {
+        final h = d.hadithById[id];
+        if (h == null) continue;
+        (cands[id] ??= Candidate(id, 'annot',
+                h: BookHadith(int.tryParse(h.number) ?? 0, h.text, norm(h.text)), labelOverride: h.reference, note: h.title))
+            .score += 2;
       }
     }
   }
-  final verses = <String, Candidate>{};
-  for (final q in qq) {
-    for (final v in d.searchQuran(q, limit: 8)) {
-      final id = 'q${v.key}';
-      (verses[id] ??= Candidate(id, 'quran', v: v)).score += 1;
+
+  Future<void> searchRound(String prompt) async {
+    final j = extractJson(await ai.chat(_sysQ, prompt, wantJson: true));
+    for (final x in (j['hadiths'] ?? const []) as List) {
+      final phrases = ((x is Map ? x['phrases'] : null) ?? const []) as List;
+      for (final ph in phrases.take(3)) {
+        final q = norm('$ph').trim();
+        if (q.length < 3) continue;
+        final words = q.split(' ').where((w) => w.length > 1).toList();
+        allQueries.add(words);
+        for (final b in books) {
+          final list = lists[b]!;
+          var n = 0;
+          // Expression exacte d'abord, sinon tous les mots.
+          for (final exact in [true, false]) {
+            if (n > 0) break;
+            for (var i = 0; i < list.length && n < perPhrase; i++) {
+              final k = list[i].key;
+              if (exact ? k.contains(q) : words.every(k.contains)) {
+                final id = '${b[0]}$i';
+                (cands[id] ??= Candidate(id, b, h: list[i])).score += exact ? 3 : 1;
+                n++;
+              }
+            }
+          }
+        }
+      }
+    }
+    for (final ph in ((j['quran'] ?? const []) as List).take(6)) {
+      for (final v in d.searchQuran('$ph', limit: 6)) {
+        (verses['q${v.key}'] ??= Candidate('q${v.key}', 'quran', v: v)).score += 1;
+      }
     }
   }
-  final hadiths = cands.values.toList()..sort((a, b) => b.score.compareTo(a.score));
-  final top = [
-    ...hadiths.take(ai.p.maxHadith),
-    ...(verses.values.toList()..sort((a, b) => b.score.compareTo(a.score))).take(ai.p.maxVerses)
-  ];
-  if (top.isEmpty) {
-    throw AiException('لم يجد البحث نصوصاً مطابقة في الكتب. أعد صياغة السؤال بكلمات أخرى.');
+
+  List<Candidate> pickTop() {
+    final hs = cands.values.toList()..sort((a, b) => b.score.compareTo(a.score));
+    final vs = verses.values.toList()..sort((a, b) => b.score.compareTo(a.score));
+    return [...hs.take(ai.p.maxHadith), ...vs.take(ai.p.maxVerses)];
   }
 
-  progress('٣/٤ قراءة ${top.length} نصاً وتصنيفها…');
-  String clip(String t) => t.length <= ai.p.clip ? t : '…${t.substring(t.length - ai.p.clip)}';
-  final buf = StringBuffer('السؤال: $question\nالدعوى: $claim\n\nالنصوص:\n');
-  for (final c in top) {
-    buf.writeln('[${c.id}] (${c.label}) ${clip(c.fullText)}');
+  Future<Map<String, dynamic>> classify(List<Candidate> top) async {
+    String clip(String t) => t.length <= ai.p.clip ? t : '…${t.substring(t.length - ai.p.clip)}';
+    final buf = StringBuffer('السؤال كما فهمناه: $understood\n(نص المستخدم: $question)\n\nالنصوص:\n');
+    for (final c in top) {
+      buf.writeln('[${c.id}] (${c.label}${c.note == null ? '' : ' — ${c.note}'}) ${clip(c.fullText)}');
+    }
+    return extractJson(await ai.chat(_sys2, buf.toString(), wantJson: true));
   }
-  final j2 = extractJson(await ai.chat(_sys2, buf.toString(), wantJson: true));
-  final byId = {for (final c in top) c.id: c};
 
-  progress('٤/٤ التحقق من المعرّفات…');
-  List<AiPick> picks(String k, {required bool quran}) {
+  List<AiPick> picks(Map<String, dynamic> j, Map<String, Candidate> byId, String k, {required bool quran}) {
     final out = <AiPick>[];
     final seen = <String>{};
-    for (final x in (j2[k] ?? const []) as List) {
+    for (final x in (j[k] ?? const []) as List) {
       final id = '${x is Map ? x['id'] : x}'.trim();
       final c = byId[id];
-      if (c == null || seen.contains(id) || (c.v != null) != quran) continue; // rejeté : inventé ou mal classé
+      if (c == null || seen.contains(id) || (c.v != null) != quran) continue; // inventé ou mal classé : rejeté
       seen.add(id);
       out.add(AiPick(c, '${x is Map ? (x['why'] ?? '') : ''}'));
     }
     return out;
   }
 
-  return AiResult(question, claim, '${j2['summary'] ?? ''}', hq, picks('answer', quran: false), picks('contra', quran: false),
-      picks('verses', quran: true), top.length);
+  progress('١/٤ تذكّر الأحاديث المتعلقة بالمعنى وألفاظ متونها…');
+  addCurated('$question $understood');
+  await searchRound('السؤال كما فهمناه: $understood\n(نص المستخدم: $question)');
+
+  var rounds = 1;
+  var top = pickTop();
+  if (top.isEmpty) throw AiException('لم يجد البحث أي نص. أعد صياغة السؤال.');
+  progress('٢/٤ وُجد ${arabicDigits(top.length)} نصاً في الكتب؛ قراءتها وتصنيفها…');
+  var j2 = await classify(top);
+  var byId = {for (final c in top) c.id: c};
+  var ans = picks(j2, byId, 'answer', quran: false), con = picks(j2, byId, 'contra', quran: false);
+
+  if (ans.isEmpty && con.isEmpty) {
+    rounds = 2;
+    progress('٣/٤ لم تكفِ الجولة الأولى؛ بحث ثانٍ بعبارات أخرى…');
+    await searchRound('السؤال كما فهمناه: $understood\n'
+        'العبارات التالية لم تجد نصوصاً مناسبة، فاقترح أحاديث وعبارات أخرى مختلفة: '
+        '${allQueries.map((q) => q.join(' ')).join('، ')}');
+    top = pickTop();
+    j2 = await classify(top);
+    byId = {for (final x in top) x.id: x};
+    ans = picks(j2, byId, 'answer', quran: false);
+    con = picks(j2, byId, 'contra', quran: false);
+  }
+
+  progress('٤/٤ التحقق من المعرّفات…');
+  final vs = picks(j2, byId, 'verses', quran: true);
+  final summary = (ans.isEmpty && con.isEmpty) ? '' : '${j2['summary'] ?? ''}';
+  return AiResult(question, understood, summary, allQueries, ans, con, vs, top.length, rounds);
+}
+
+String arabicDigits(int n) {
+  const d = '٠١٢٣٤٥٦٧٨٩';
+  return '$n'.split('').map((ch) => d[int.parse(ch)]).join();
 }

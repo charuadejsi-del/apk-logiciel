@@ -20,24 +20,57 @@ class AiResearchPage extends StatefulWidget {
 
 class _AiResearchPageState extends State<AiResearchPage> {
   final steps = <String>[];
+  AiUnderstanding? und; // ce que l'IA a compris
+  bool editing = false, confirmed = false;
+  late final editCtrl = TextEditingController();
   AiResult? res;
   String? error;
 
   @override
   void initState() {
     super.initState();
-    _run();
+    _understand();
   }
 
-  Future<void> _run() async {
+  @override
+  void dispose() {
+    editCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _understand() async {
     setState(() {
+      und = null;
+      res = null;
+      error = null;
+      confirmed = false;
+      editing = false;
+      steps.clear();
+    });
+    try {
+      final u = await aiUnderstand(widget.question);
+      if (mounted) {
+        setState(() {
+          und = u;
+          editCtrl.text = u.understood;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    }
+  }
+
+  Future<void> _search(String understood) async {
+    setState(() {
+      confirmed = true;
+      editing = false;
       steps.clear();
       res = null;
       error = null;
     });
     try {
-      final r = await aiResearch(widget.question, (s) {
-        if (mounted) setState(() => steps.add(s));
+      final r = await aiResearch(widget.question, understood, (st) {
+        if (mounted) setState(() => steps.add(st));
       });
       if (mounted) setState(() => res = r);
     } catch (e) {
@@ -46,7 +79,7 @@ class _AiResearchPageState extends State<AiResearchPage> {
   }
 
   String _text(AiResult r) {
-    final b = StringBuffer('🔎 ${r.question}\n\n');
+    final b = StringBuffer('🔎 ${r.claim}\n\n');
     void sec(String t, List<AiPick> l) {
       if (l.isEmpty) return;
       b.writeln(t);
@@ -68,20 +101,71 @@ class _AiResearchPageState extends State<AiResearchPage> {
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     final r = res;
+    final u = und;
     return Scaffold(
       appBar: AppBar(title: const Text('بحث بالذكاء الاصطناعي'), actions: [
         if (r != null) ...[
           IconButton(tooltip: 'نسخ', icon: const Icon(Icons.copy_all_rounded), onPressed: () => copyText(context, _text(r))),
           IconButton(tooltip: 'مشاركة', icon: const Icon(Icons.share_rounded), onPressed: () => shareText(context, _text(r))),
         ],
-        IconButton(tooltip: 'إعادة البحث', icon: const Icon(Icons.refresh_rounded), onPressed: _run),
+        IconButton(tooltip: 'من جديد', icon: const Icon(Icons.refresh_rounded), onPressed: _understand),
       ]),
       body: ListView(padding: const EdgeInsets.only(bottom: 30), children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
-          child: Text(widget.question, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, height: 1.4)),
+          child: Text('سؤالك: ${widget.question}', style: TextStyle(fontSize: 15, color: s.onSurfaceVariant)),
         ),
-        if (r == null && error == null) ...[
+        // ── Étape 1 : ce que l'IA a compris
+        if (u == null && error == null)
+          const ListTile(
+            leading: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4)),
+            title: Text('أحاول فهم قصدك…'),
+          ),
+        if (u != null)
+          AppCard(
+            border: s.primary.withAlpha(120),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                Icon(Icons.psychology_rounded, color: s.primary),
+                const SizedBox(width: 8),
+                Text('فهمتُ سؤالك هكذا:', style: TextStyle(fontWeight: FontWeight.w800, color: s.primary)),
+              ]),
+              const SizedBox(height: 8),
+              if (editing)
+                TextField(
+                  controller: editCtrl,
+                  maxLines: null,
+                  autofocus: true,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'اكتب قصدك بوضوح'),
+                )
+              else ...[
+                Text(u.understood, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, height: 1.5)),
+                if (u.yes.isNotEmpty || u.no.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  if (u.yes.isNotEmpty) Text('✅ ${u.yes}', style: TextStyle(color: s.onSurfaceVariant)),
+                  if (u.no.isNotEmpty) Text('❌ ${u.no}', style: TextStyle(color: s.onSurfaceVariant)),
+                ],
+              ],
+              if (!confirmed) ...[
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  FilledButton.icon(
+                    icon: const Icon(Icons.search_rounded),
+                    label: Text(editing ? 'ابحث بهذا' : 'صحيح، ابحث'),
+                    onPressed: () => _search(editing ? editCtrl.text.trim() : u.understood),
+                  ),
+                  if (!editing)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.edit_rounded),
+                      label: const Text('عدّل'),
+                      onPressed: () => setState(() => editing = true),
+                    ),
+                ]),
+              ],
+            ]),
+          ),
+        // ── Étape 2 : recherche en cours
+        if (confirmed && r == null && error == null) ...[
           for (final st in steps)
             ListTile(dense: true, leading: const Icon(Icons.check_circle_outline_rounded, size: 20), title: Text(st)),
           const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator())),
@@ -93,39 +177,39 @@ class _AiResearchPageState extends State<AiResearchPage> {
               Text(error!, style: TextStyle(color: s.onErrorContainer)),
               const SizedBox(height: 8),
               Wrap(spacing: 8, children: [
-                FilledButton(onPressed: _run, child: const Text('إعادة المحاولة')),
+                FilledButton(onPressed: u != null && confirmed ? () => _search(editCtrl.text.trim()) : _understand,
+                    child: const Text('إعادة المحاولة')),
                 OutlinedButton(onPressed: () => openSection(context, 'settings'), child: const Text('الإعدادات')),
               ]),
             ]),
           ),
+        // ── Étape 3 : résultats
         if (r != null) ...[
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-            child: Text('الدعوى: ${r.claim}', style: TextStyle(color: s.onSurfaceVariant)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
             child: Text(
-                'بحث في ${arNum(r.searched)} نصاً من الكتب داخل البرنامج. النصوص المعروضة من الكتب نفسها، '
-                'وكل تصنيف كتبه الذكاء الاصطناعي: راجعه قبل أن تستشهد به.',
+                'بحث في ${arNum(r.searched)} نصاً من الكتب داخل البرنامج${r.rounds > 1 ? ' (جولتان)' : ''}. '
+                'النصوص المعروضة من الكتب نفسها، والتصنيف من الذكاء الاصطناعي: راجعه قبل أن تستشهد به.',
                 style: TextStyle(color: s.onSurfaceVariant, fontSize: 12.5)),
           ),
           _Section('✅ روايات تجيب عن السؤال', const Color(0xFF2E7D32), r.answer),
           _Section('❌ روايات تناقضها', const Color(0xFFC62828), r.contra),
           _Section('📖 آيات تخالفها', C.goldDeep, r.verses),
-          if (r.answer.isEmpty && r.contra.isEmpty && r.verses.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(18),
-              child: Text('لم يجد الذكاء الاصطناعي نصوصاً ذات صلة بين ما وجده البحث. أعد صياغة السؤال.'),
+          if (r.answer.isEmpty && r.contra.isEmpty)
+            AppCard(
+              child: Text(
+                  'لم أجد روايات مناسبة في هذا البحث. هذا لا يعني أنها غير موجودة في الكتب: '
+                  'جرّب «عدّل» واكتب قصدك بكلمات أخرى، أو ابحث بعبارة من الحديث في قسم «الكتب».',
+                  style: TextStyle(color: s.onSurfaceVariant, height: 1.6)),
             ),
           if (r.summary.isNotEmpty)
             ColoredBlock(label: 'خلاصة الذكاء الاصطناعي', text: r.summary, color: s.tertiary, icon: Icons.auto_awesome_rounded),
           ExpansionTile(
-            title: const Text('كلمات البحث المستعملة'),
+            title: const Text('العبارات التي بحث بها في المتون'),
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Text(r.queries.map((q) => q.join(' + ')).join('  •  ')),
+                child: Text(r.queries.map((q) => q.join(' ')).join('  •  ')),
               ),
             ],
           ),
