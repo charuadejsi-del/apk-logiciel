@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../data.dart';
+import 'ai_research.dart';
 import 'cases.dart';
 import 'common.dart';
 
@@ -169,6 +170,16 @@ class _SmartSearchPageState extends State<SmartSearchPage> {
           child: q.trim().isEmpty
               ? _TopicGrid(onPick: (t) => _open(context, t))
               : ListView(padding: const EdgeInsets.only(bottom: 30), children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      label: const Text('ابحث بالذكاء الاصطناعي: أحاديث تجيب، وأحاديث تناقض، وآيات تخالف'),
+                      onPressed: () => Navigator.push(
+                          context, MaterialPageRoute(builder: (_) => AiResearchPage(q.trim()))),
+                    ),
+                  ),
                   if (topics.isNotEmpty) ...[
                     const SectionHeader('موضوع مُحلَّل جاهز', icon: Icons.auto_awesome_rounded),
                     for (final t in topics.take(3)) _TopicCard(t, onTap: () => _open(context, t)),

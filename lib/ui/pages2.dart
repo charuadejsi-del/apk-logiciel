@@ -7,6 +7,7 @@ import '../state.dart';
 import 'common.dart';
 import 'mushaf.dart';
 import '../updater.dart';
+import 'ai_research.dart';
 
 // ───────────────────────── Coran ─────────────────────────
 
@@ -567,6 +568,8 @@ class _SettingsPageState extends State<SettingsPage> {
               onSelectionChanged: (v) => st.setTheme(v.first),
             ),
           ),
+          const SectionHeader('الذكاء الاصطناعي (البحث الذكي)', icon: Icons.auto_awesome_rounded),
+          const AiSettingsCard(),
           const SectionHeader('التحديثات', icon: Icons.system_update_rounded),
           AppCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

@@ -26,6 +26,10 @@ class AppState extends ChangeNotifier {
   final List<MyArg> myArgs = [];
   int trainKnown = 0, trainUnknown = 0;
   String updateUrl = Brand.defaultUpdateUrl;
+  String aiProvider = '';
+  String aiKey = '';
+  String aiModel = '';
+  bool aiTabari = false;
   bool mushafNight = true;
   int mushafTheme = 0; // 0 ورقي، 1 أبيض، 2 ليلي
   double mushafFont = 25;
@@ -51,6 +55,10 @@ class AppState extends ChangeNotifier {
       trainKnown = p.getInt('trainKnown') ?? 0;
       trainUnknown = p.getInt('trainUnknown') ?? 0;
       updateUrl = p.getString('updateUrl') ?? Brand.defaultUpdateUrl;
+      aiProvider = p.getString('aiProvider') ?? '';
+      aiKey = p.getString('aiKey') ?? '';
+      aiModel = p.getString('aiModel') ?? '';
+      aiTabari = p.getBool('aiTabari') ?? false;
       mushafNight = p.getBool('mushafNight') ?? true;
       mushafTheme = (p.getInt('mushafTheme') ?? 0).clamp(0, 2).toInt();
       mushafFont = (p.getDouble('mushafFont') ?? 25).clamp(16, 44).toDouble();
@@ -75,6 +83,10 @@ class AppState extends ChangeNotifier {
     p.setInt('trainKnown', trainKnown);
     p.setInt('trainUnknown', trainUnknown);
     p.setString('updateUrl', updateUrl);
+    p.setString('aiProvider', aiProvider);
+    p.setString('aiKey', aiKey);
+    p.setString('aiModel', aiModel);
+    p.setBool('aiTabari', aiTabari);
     p.setBool('mushafNight', mushafNight);
     p.setInt('mushafTheme', mushafTheme);
     p.setDouble('mushafFont', mushafFont);
@@ -123,6 +135,15 @@ class AppState extends ChangeNotifier {
   void setSkipBuild(int v) {
     skipBuild = v;
     _save();
+  }
+
+  void setAi({String? provider, String? key, String? model, bool? tabari}) {
+    if (provider != null) aiProvider = provider;
+    if (key != null) aiKey = key.trim();
+    if (model != null) aiModel = model.trim();
+    if (tabari != null) aiTabari = tabari;
+    _save();
+    notifyListeners();
   }
 
   void toggleBookmark(int page) {

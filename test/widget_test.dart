@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:munazir/ai.dart';
 import 'package:munazir/data.dart';
 
 void main() {
@@ -124,5 +125,15 @@ void main() {
     final l = await Books.load('bukhari');
     expect(l.length, greaterThan(7000));
     expect(Books.search(l, 'حسبنا كتاب الله').isNotEmpty, isTrue);
+  });
+
+  test('IA : détection du fournisseur et lecture du JSON', () {
+    expect(detectProvider('AIzaSyXXXX'), 'gemini');
+    expect(detectProvider('sk-ant-api03-x'), 'anthropic');
+    expect(detectProvider('gsk_abc'), 'groq');
+    expect(detectProvider('sk-or-v1-x'), 'openrouter');
+    expect(detectProvider('sk-proj-x'), 'openai');
+    expect(extractJson('```json\n{"a": [1]}\n```')['a'], [1]);
+    expect(() => extractJson('pas de json'), throwsA(isA<AiException>()));
   });
 }
