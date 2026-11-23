@@ -312,4 +312,40 @@ void main() {
     }
     expect(jumps, greaterThanOrEqualTo(4));
   });
+
+  test('liaisons cachées : 3 motifs reliés sous l\'autre couleur, sans coupe', () {
+    const w = 120, h = 420;
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    void black(int x, int y) {
+      final i = (y * w + x) * 4;
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+    }
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        // Trois « roses » (disques), couleur A.
+        for (final cy in const [40, 200, 360]) {
+          if ((x - 60) * (x - 60) + (y - cy) * (y - cy) <= 20 * 20) black(x, y);
+        }
+        // Deux bandes, couleur B, entre les roses (séparées par 1 px de blanc).
+        if (x >= 54 && x < 66 && ((y >= 62 && y <= 178) || (y >= 222 && y <= 338))) black(x, y);
+      }
+    }
+    final a = analyzeImage(DigitizeInput(rgba, w, h, groups: 2));
+    expect(a.shapes.length, 5);
+    a.setWidthMm(20);
+    for (final s in a.shapes) {
+      s.group = s.compactness > 0.6 ? 0 : 1; // A = disques, B = bandes
+      s.mode = StitchMode.tatami;
+      s.overridden = true;
+    }
+    final r = digitizeRequest(DigitizeRequest(
+        a, const DigitizeOptions(groupColors: [0xFFC8102E, 0xFF1E7A46]), 'ROSES'));
+    expect(r.colorOrder.first, 0, reason: 'la couleur éparpillée passe d\'abord');
+    expect(r.hiddenRuns, greaterThanOrEqualTo(2));
+    // Coupes : changement de fil + fin seulement.
+    expect(r.pattern.trimCount, lessThanOrEqualTo(2));
+  });
 }

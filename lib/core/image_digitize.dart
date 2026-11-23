@@ -38,6 +38,9 @@ class ShapeInfo {
   bool excluded = false; // retirée par l'utilisateur
   StitchMode mode = StitchMode.auto;
 
+  /// Choix fait pour cette forme seule (prioritaire sur le choix de sa couleur).
+  bool overridden = false;
+
   /// Demi-épaisseur maximale de la forme, en pixels.
   double maxRadiusPx = 0;
 
@@ -409,8 +412,20 @@ class DigitizeRequest {
   const DigitizeRequest(this.analysis, this.options, this.name);
 }
 
+/// Résultat avec le bilan de coût.
+class DigitizeResult {
+  final EmbPattern pattern;
+  final int hiddenRuns; // liaisons en point droit cachées (sans saut ni coupe)
+  final List<int> colorOrder; // groupes dans l'ordre de couture
+  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder);
+}
+
 /// Point d'entrée utilisable dans un isolat (`compute`).
-EmbPattern digitizeRequest(DigitizeRequest r) => digitize(r.analysis, r.options, name: r.name);
+DigitizeResult digitizeRequest(DigitizeRequest r) {
+  final d = _Digitizer(r.analysis, r.options);
+  final p = d.build(r.name);
+  return DigitizeResult(p, d._hiddenRuns, d.colorOrder);
+}
 
 class _P {
   final double x, y;
@@ -776,7 +791,7 @@ class _Digitizer {
     final (fOrder, fFromTop) = dfsFrom(xRoot, xTop);
 
     final entry = endPoint(cells[eRoot], eTop);
-    if (_fresh || cur.dist(entry) > 0.5) _jumpTo(entry);
+    _enter(s, entry);
 
     List<_Row> rowsFrom(_Cell c, bool top) => top ? c.rows : c.rows.reversed.toList();
 
@@ -1286,7 +1301,7 @@ class _Digitizer {
       final cen = fwd ? cen0 : cen0.reversed.toList();
       final le = fwd ? le0 : le0.reversed.toList();
       final ri = fwd ? ri0 : ri0.reversed.toList();
-      _jumpTo(nodeD[entryN]);
+      _enter(s, nodeD[entryN]);
       if (o.underlay) {
         // Point droit à l'aller sur un bord, au retour sur l'autre (sous le satin).
         _runPoly([
@@ -1351,7 +1366,7 @@ class _Digitizer {
     }
 
     final all = {for (var k = 0; k < es.length; k++) k};
-    _jumpTo(nodeD[entryN]);
+    _enter(s, nodeD[entryN]);
     var at = entryN;
     final satinStart = order.isEmpty ? exitN : order.last.$3;
     if (o.underlay) {
@@ -1444,46 +1459,343 @@ class _Digitizer {
     return best;
   }
 
+  // ───────────────────────── Ordre et trajets cachés ─────────────────────────
+
+  /// Points du bord de chaque forme (≤ 48), pour mesurer les écarts entre formes.
+  late final Map<int, List<_P>> _edgePts = _computeEdgePts();
+
+  Map<int, List<_P>> _computeEdgePts() {
+    final all = <int, List<_P>>{};
+    for (var y = 1; y < a.h - 1; y++) {
+      for (var x = 1; x < a.w - 1; x++) {
+        final i = y * a.w + x;
+        final l = a.labels[i];
+        if (l == 0) continue;
+        if (a.labels[i - 1] != l || a.labels[i + 1] != l || a.labels[i - a.w] != l ||
+            a.labels[i + a.w] != l) {
+          (all[l] ??= <_P>[]).add(pixelCenter(x, y));
+        }
+      }
+    }
+    return {
+      for (final e in all.entries)
+        e.key: [
+          for (var k = 0; k < e.value.length; k += math.max(1, e.value.length ~/ 48)) e.value[k],
+        ],
+    };
+  }
+
+  /// Écart bord à bord entre deux formes (0,1 mm).
+  double _gap(ShapeInfo p, ShapeInfo q) {
+    final a1 = _edgePts[p.id] ?? const <_P>[], b1 = _edgePts[q.id] ?? const <_P>[];
+    var best = double.infinity;
+    for (final u in a1) {
+      for (final v in b1) {
+        final d = u.dist(v);
+        if (d < best) best = d;
+      }
+    }
+    return best.isFinite ? best : 0;
+  }
+
+  /// Chaîne des formes d'une couleur : plus proche voisin puis amélioration 2-opt,
+  /// en pénalisant les écarts qui obligeraient à couper le fil.
+  List<ShapeInfo> _chain(List<ShapeInfo> members) {
+    final n = members.length;
+    if (n <= 2) return members;
+    final d = List.generate(n, (_) => Float64List(n));
+    final limit = o.jumpMaxMm * 10;
+    for (var i = 0; i < n; i++) {
+      for (var j = i + 1; j < n; j++) {
+        final g = _gap(members[i], members[j]);
+        final c = g + (g > limit ? 300 : 0);
+        d[i][j] = c;
+        d[j][i] = c;
+      }
+    }
+    // Départ : la forme la plus en haut à gauche.
+    var start = 0;
+    for (var i = 1; i < n; i++) {
+      if (members[i].cx + members[i].cy < members[start].cx + members[start].cy) start = i;
+    }
+    final used = List<bool>.filled(n, false);
+    final tour = <int>[start];
+    used[start] = true;
+    for (var k = 1; k < n; k++) {
+      final last = tour.last;
+      var bi = -1;
+      for (var j = 0; j < n; j++) {
+        if (!used[j] && (bi < 0 || d[last][j] < d[last][bi])) bi = j;
+      }
+      used[bi] = true;
+      tour.add(bi);
+    }
+    // 2-opt sur un chemin ouvert.
+    var improved = true;
+    var guard = 0;
+    while (improved && guard++ < 40) {
+      improved = false;
+      for (var i = 0; i < n - 2; i++) {
+        for (var j = i + 2; j < n; j++) {
+          final a0 = tour[i], a1 = tour[i + 1], b0 = tour[j];
+          final before = d[a0][a1] + (j + 1 < n ? d[b0][tour[j + 1]] : 0);
+          final after = d[a0][b0] + (j + 1 < n ? d[a1][tour[j + 1]] : 0);
+          if (after + 1e-6 < before) {
+            var lo = i + 1, hi = j;
+            while (lo < hi) {
+              final t = tour[lo];
+              tour[lo] = tour[hi];
+              tour[hi] = t;
+              lo++;
+              hi--;
+            }
+            improved = true;
+          }
+        }
+      }
+    }
+    return [for (final i in tour) members[i]];
+  }
+
+  // Grille grossière (≈ 1 mm) pour chercher les trajets cachés.
+  late final int _gf = math.max(1, (1.0 / a.pxMm).round());
+  late final int _gw = (a.w + _gf - 1) ~/ _gf, _gh = (a.h + _gf - 1) ~/ _gf;
+  late final Int32List _grid = () {
+    final g = Int32List(_gw * _gh);
+    for (var gy = 0; gy < _gh; gy++) {
+      for (var gx = 0; gx < _gw; gx++) {
+        final x = math.min(a.w - 1, gx * _gf + _gf ~/ 2), y = math.min(a.h - 1, gy * _gf + _gf ~/ 2);
+        g[gy * _gw + gx] = a.labels[y * a.w + x];
+      }
+    }
+    return g;
+  }();
+
+  /// Rang de couture de chaque forme (pour savoir si elle sera brodée plus tard).
+  final Map<int, int> _rank = {};
+  int _sewnUpTo = -1; // rang de la dernière forme brodée
+  int _hiddenRuns = 0;
+
+  /// Trajet en point droit caché sous des formes pas encore brodées, de la position
+  /// actuelle vers [to]. Renvoie false s'il faudrait trop marcher à découvert.
+  bool _hiddenRun(_P to, int currentId) {
+    final sx = ((cur.x - ox) / px / _gf).floor().clamp(0, _gw - 1).toInt();
+    final sy = ((cur.y - oy) / px / _gf).floor().clamp(0, _gh - 1).toInt();
+    final tx = ((to.x - ox) / px / _gf).floor().clamp(0, _gw - 1).toInt();
+    final ty = ((to.y - oy) / px / _gf).floor().clamp(0, _gh - 1).toInt();
+    final straight = math.sqrt(((sx - tx) * (sx - tx) + (sy - ty) * (sy - ty)).toDouble());
+    if (straight > 150) return false; // > 15 cm : on saute
+    final margin = 20;
+    final x0 = math.max(0, math.min(sx, tx) - margin), x1 = math.min(_gw - 1, math.max(sx, tx) + margin);
+    final y0 = math.max(0, math.min(sy, ty) - margin), y1 = math.min(_gh - 1, math.max(sy, ty) + margin);
+    final bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    const bare = 25.0;
+    double cost(int gx, int gy) {
+      final l = _grid[gy * _gw + gx];
+      if (l == 0) return bare;
+      if (l == currentId) return 6; // on quitte la forme qu'on vient de broder
+      final r = _rank[l];
+      if (r == null) return bare; // forme retirée
+      return r > _sewnUpTo ? 1 : double.infinity; // déjà brodée : interdit
+    }
+
+    final dist = Float64List(bw * bh)..fillRange(0, bw * bh, double.infinity);
+    final prev = Int32List(bw * bh)..fillRange(0, bw * bh, -1);
+    final s = (sy - y0) * bw + (sx - x0), t = (ty - y0) * bw + (tx - x0);
+    dist[s] = 0;
+    final heap = _Heap();
+    heap.push(0, s);
+    while (heap.isNotEmpty) {
+      final (dc, c) = heap.pop();
+      if (dc > dist[c]) continue;
+      if (c == t) break;
+      final cx = c % bw, cy = c ~/ bw;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          final nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+          final ni = ny * bw + nx;
+          final w = ni == t ? 1.0 : cost(nx + x0, ny + y0);
+          if (w.isInfinite) continue;
+          final nd = dc + w * ((dx != 0 && dy != 0) ? 1.414 : 1.0);
+          if (nd < dist[ni]) {
+            dist[ni] = nd;
+            prev[ni] = c;
+            heap.push(nd, ni);
+          }
+        }
+      }
+    }
+    if (dist[t].isInfinite) return false;
+    // Chemin, et longueur parcourue à découvert.
+    final cells = <int>[];
+    var c = t;
+    var bareCells = 0;
+    while (c != s) {
+      cells.add(c);
+      final gx = c % bw + x0, gy = c ~/ bw + y0;
+      if (c != t && _grid[gy * _gw + gx] == 0) bareCells++;
+      c = prev[c];
+    }
+    final cellMm = _gf * a.pxMm;
+    if (cells.isEmpty) {
+      _stitchTo(to, runLen);
+      return true;
+    }
+    if (bareCells * cellMm > 2.0) return false; // trop visible : saut
+    if (cells.length * cellMm > math.max(3 * straight * cellMm, straight * cellMm + 40)) {
+      return false; // détour trop long
+    }
+    final pts = <_P>[
+      for (final cc in cells.reversed)
+        _P(ox + ((cc % bw + x0) * _gf + _gf / 2) * px, oy + ((cc ~/ bw + y0) * _gf + _gf / 2) * px),
+    ];
+    pts[pts.length - 1] = to;
+    _runPoly(pts);
+    _hiddenRuns++;
+    return true;
+  }
+
+  /// Entrée dans une forme : trajet intérieur si on est déjà dessus, sinon saut.
+  void _enter(ShapeInfo s, _P p) {
+    if (_fresh || out.isEmpty) {
+      _jumpTo(p);
+      return;
+    }
+    if (cur.dist(p) <= 0.5) return;
+    var near = false;
+    for (var dy = -3; dy <= 3 && !near; dy++) {
+      for (var dx = -3; dx <= 3 && !near; dx++) {
+        if (labelAt(_P(cur.x + dx * px, cur.y + dy * px)) == s.id) near = true;
+      }
+    }
+    if (near) {
+      _travel(s, p);
+    } else {
+      _jumpTo(p);
+    }
+  }
+
+  /// Ordre des couleurs : on essaie toutes les permutations (jusqu'à 5 couleurs) et
+  /// on garde celle où les trajets entre formes sont le plus cachés par les couleurs
+  /// brodées ensuite (les couleurs éparpillées passent d'abord).
+  List<int> _colorOrder(Map<int, List<ShapeInfo>> chains) {
+    final groups = chains.keys.toList()..sort();
+    if (groups.length <= 1) return groups;
+    // Pour chaque liaison d'une chaîne : étiquettes rencontrées en ligne droite.
+    final links = <int, List<List<int>>>{};
+    for (final g in groups) {
+      final ch = chains[g]!;
+      final ls = <List<int>>[];
+      for (var i = 0; i + 1 < ch.length; i++) {
+        final p = _nearestPixel(ch[i], pixelCenter(ch[i + 1].cx.round(), ch[i + 1].cy.round()));
+        final q = _nearestPixel(ch[i + 1], p);
+        final n = math.max(1, (p.dist(q) / 10).ceil()); // tous les 1 mm
+        ls.add([for (var k = 1; k < n; k++) labelAt(_P(p.x + (q.x - p.x) * k / n, p.y + (q.y - p.y) * k / n))]);
+      }
+      links[g] = ls;
+    }
+    final groupOf = {for (final s in a.shapes) s.id: s.group};
+    double score(List<int> order) {
+      final pos = {for (var i = 0; i < order.length; i++) order[i]: i};
+      var total = 0.0;
+      for (final g in order) {
+        for (final samples in links[g]!) {
+          var bareMm = 0.0;
+          for (final l in samples) {
+            if (l == 0) {
+              bareMm += 1;
+            } else {
+              final gl = groupOf[l];
+              if (gl == null || pos[gl] == null) {
+                bareMm += 1;
+              } else if (pos[gl]! < pos[g]!) {
+                bareMm += 3; // par-dessus une couleur déjà brodée
+              }
+            }
+          }
+          total += bareMm <= 2.0 ? 0 : 30 + bareMm;
+        }
+      }
+      return total;
+    }
+
+    List<int> best = groups;
+    var bestScore = score(groups);
+    if (groups.length <= 5) {
+      void permute(List<int> done, List<int> rest) {
+        if (rest.isEmpty) {
+          final sc = score(done);
+          if (sc < bestScore - 1e-9) {
+            bestScore = sc;
+            best = List.of(done);
+          }
+          return;
+        }
+        for (var i = 0; i < rest.length; i++) {
+          permute([...done, rest[i]], [...rest]..removeAt(i));
+        }
+      }
+
+      permute([], groups);
+    }
+    return best;
+  }
+
   EmbPattern build(String name) {
-    final groups = <int>{for (final s in a.shapes) if (!s.excluded) s.group}.toList()..sort();
+    final members = <int, List<ShapeInfo>>{};
+    for (final s in a.shapes) {
+      if (!s.excluded) (members[s.group] ??= []).add(s);
+    }
+    final chains = {for (final e in members.entries) e.key: _chain(e.value)};
+    final order = _colorOrder(chains);
+    colorOrder = order;
+
+    // Rang de couture de chaque forme ; les chaînes s'enchaînent bout à bout.
+    final plan = <List<ShapeInfo>>[];
+    var lastPos = pixelCenter(0, 0);
+    var r = 0;
+    for (final g in order) {
+      var ch = chains[g]!;
+      if (ch.isEmpty) continue;
+      final f = pixelCenter(ch.first.cx.round(), ch.first.cy.round());
+      final l = pixelCenter(ch.last.cx.round(), ch.last.cy.round());
+      if (l.dist(lastPos) < f.dist(lastPos)) ch = ch.reversed.toList();
+      for (final s in ch) {
+        _rank[s.id] = r++;
+      }
+      plan.add(ch);
+      lastPos = pixelCenter(ch.last.cx.round(), ch.last.cy.round());
+    }
+
     final colors = <int>[];
     var firstGroup = true;
-    for (final g in groups) {
-      final members = [for (final s in a.shapes) if (s.group == g && !s.excluded) s];
-      if (members.isEmpty) continue;
+    for (final seq in plan) {
+      final g = seq.first.group;
       if (!firstGroup) {
         _lockOff();
         out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.trim));
         out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.colorChange));
         _fresh = true;
       }
-      colors.add(o.groupColors.isEmpty ? defaultPalette[g % defaultPalette.length]
+      colors.add(o.groupColors.isEmpty
+          ? defaultPalette[g % defaultPalette.length]
           : o.groupColors[g % o.groupColors.length]);
-      // Ordre des formes du groupe : chaîne de la plus proche en la plus proche.
-      final left = [...members];
-      final seq = <ShapeInfo>[];
-      var pos = out.isEmpty ? pixelCenter(0, 0) : cur;
-      while (left.isNotEmpty) {
-        var bi = 0;
-        var bd = double.infinity;
-        for (var i = 0; i < left.length; i++) {
-          final dd = pixelCenter(left[i].cx.round(), left[i].cy.round()).dist(pos);
-          if (dd < bd) {
-            bd = dd;
-            bi = i;
-          }
-        }
-        final sh = left.removeAt(bi);
-        seq.add(sh);
-        pos = pixelCenter(sh.cx.round(), sh.cy.round());
-      }
       for (var i = 0; i < seq.length; i++) {
         final sh = seq[i];
-        // Point de sortie visé : le bord de la forme suivante le plus proche.
-        final next = i + 1 < seq.length ? _nearestPixel(seq[i + 1], pixelCenter(sh.cx.round(), sh.cy.round())) : null;
+        if (i > 0 && !_fresh) {
+          // Liaison avec la forme précédente : point droit caché si possible.
+          final target = _nearestPixel(sh, cur);
+          _hiddenRun(target, seq[i - 1].id);
+        }
+        final next = i + 1 < seq.length
+            ? _nearestPixel(seq[i + 1], pixelCenter(sh.cx.round(), sh.cy.round()))
+            : null;
         final satin = sh.isSatin(a.pxMm) &&
             _satinShape(sh, next: next, auto: sh.mode == StitchMode.auto);
         if (!satin) _shape(sh, next: next);
+        _sewnUpTo = _rank[sh.id]!;
       }
       firstGroup = false;
     }
@@ -1493,5 +1805,55 @@ class _Digitizer {
     }
     out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.end));
     return EmbPattern(name: name, stitches: out, colors: colors);
+  }
+
+  List<int> colorOrder = const [];
+}
+
+/// Tas binaire minimal (priorité, valeur) pour Dijkstra.
+class _Heap {
+  final _k = <double>[];
+  final _v = <int>[];
+  bool get isNotEmpty => _k.isNotEmpty;
+
+  void push(double k, int v) {
+    _k.add(k);
+    _v.add(v);
+    var i = _k.length - 1;
+    while (i > 0) {
+      final p = (i - 1) >> 1;
+      if (_k[p] <= _k[i]) break;
+      _swap(i, p);
+      i = p;
+    }
+  }
+
+  (double, int) pop() {
+    final top = (_k[0], _v[0]);
+    final lk = _k.removeLast(), lv = _v.removeLast();
+    if (_k.isNotEmpty) {
+      _k[0] = lk;
+      _v[0] = lv;
+      var i = 0;
+      while (true) {
+        final l = 2 * i + 1, r = l + 1;
+        var m = i;
+        if (l < _k.length && _k[l] < _k[m]) m = l;
+        if (r < _k.length && _k[r] < _k[m]) m = r;
+        if (m == i) break;
+        _swap(i, m);
+        i = m;
+      }
+    }
+    return top;
+  }
+
+  void _swap(int i, int j) {
+    final tk = _k[i];
+    _k[i] = _k[j];
+    _k[j] = tk;
+    final tv = _v[i];
+    _v[i] = _v[j];
+    _v[j] = tv;
   }
 }
