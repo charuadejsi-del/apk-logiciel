@@ -300,7 +300,7 @@ void main() {
       s.group = 0;
     }
     final p = digitize(a, const DigitizeOptions(groupColors: [0xFF0B3D91]));
-    final pitch = 70 * a.pxMm * 10; // écart entre centres, en 0,1 mm
+    final pitch = 70 * 1000 / 228; // écart entre centres (70 px sur 228 px = 100 mm), en 0,1 mm
     Stitch? prev;
     var jumps = 0;
     for (final s in p.stitches) {
