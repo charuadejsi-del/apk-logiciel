@@ -7,6 +7,7 @@ import 'package:broderie/core/edits.dart';
 import 'package:broderie/core/pattern.dart';
 import 'package:broderie/core/pes.dart';
 import 'package:broderie/core/font_block.dart';
+import 'package:broderie/core/hoop.dart';
 import 'package:broderie/core/text_engine.dart';
 import 'package:broderie/core/transform.dart';
 import 'package:broderie/core/image_digitize.dart';
@@ -373,5 +374,60 @@ void main() {
         a, const DigitizeOptions(groupColors: [0xFFC8102E], densityMm: 0.30), 'PLAFOND'));
     expect(r.refStitches, greaterThan(0));
     expect(r.pattern.stitchCount, lessThanOrEqualTo((r.refStitches * 1.5).round()));
+  });
+
+  test('préparer pour la machine : découpe dans le vide, cadre en premier, tout cousu', () {
+    // Deux blocs de tatami de 12 × 20 cm séparés par un vide de 2 cm au milieu.
+    final st = <Stitch>[];
+    for (final x0 in [0, 1400]) {
+      st.add(Stitch(x0, 0, StitchType.jump));
+      for (var y = 0; y <= 2000; y += 4) {
+        final fwd = (y ~/ 4).isEven;
+        for (var k = 0; k <= 34; k++) {
+          final x = fwd ? x0 + k * 35 : x0 + 1190 - k * 35;
+          st.add(Stitch(x, y, StitchType.stitch));
+        }
+      }
+      st.add(Stitch(st.last.x, st.last.y, StitchType.trim));
+    }
+    st.add(Stitch(st.last.x, st.last.y, StitchType.end));
+    final p = EmbPattern(name: 'BLOCS', stitches: st);
+    final r = prepareForHoop(p, const PrepOptions(hoopWmm: 180, hoopHmm: 280));
+    expect(r.error, isNull);
+    expect(r.pieces.length, 2);
+    // La ligne de coupe passe dans le vide (entre 119 et 140 mm) : rien n'est coupé.
+    expect(r.xs[1], inInclusiveRange(1190, 1400));
+    expect(r.pieces.every((x) => x.cutObjects == 0), isTrue);
+    for (final pc in r.pieces) {
+      final b = pc.pattern.bounds;
+      expect(b.width, lessThanOrEqualTo(1800));
+      expect(b.height, lessThanOrEqualTo(2800));
+      // Le cadre (points de 5,8 mm) est cousu avant le dessin.
+      final s = pc.pattern.stitches;
+      expect(s.first.type, StitchType.jump);
+      expect(s.indexWhere((x) => x.type == StitchType.trim), greaterThan(4));
+      // Relu en DST sans perte.
+      expect(readDst(writeDst(pc.pattern)).stitchCount, pc.pattern.stitchCount);
+    }
+    // Points du dessin conservés (+ cadre et croix).
+    final total = r.pieces.fold(0, (s, x) => s + x.pattern.stitchCount);
+    expect(total, greaterThan(p.stitchCount));
+  });
+
+  test('préparer : un bloc plus large que le cadre est coupé avec recouvrement', () {
+    final st = <Stitch>[const Stitch(0, 0, StitchType.jump)];
+    for (var y = 0; y <= 1000; y += 4) {
+      final fwd = (y ~/ 4).isEven;
+      for (var k = 0; k <= 100; k++) {
+        st.add(Stitch(fwd ? k * 30 : 3000 - k * 30, y, StitchType.stitch));
+      }
+    }
+    final p = EmbPattern(name: 'LARGE', stitches: st);
+    final r = prepareForHoop(p, const PrepOptions(hoopWmm: 180, hoopHmm: 280));
+    expect(r.pieces.length, 2);
+    for (final pc in r.pieces) {
+      expect(pc.pattern.bounds.width, lessThanOrEqualTo(1800));
+      expect(pc.cutObjects, greaterThan(0));
+    }
   });
 }

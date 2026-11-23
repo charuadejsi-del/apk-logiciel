@@ -386,6 +386,9 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
               const SizedBox(height: 12),
               Text('${p.stitchCount} points'
                   '${r.refStitches > 0 ? '  (léger : ${r.refStitches}, +${((p.stitchCount / r.refStitches - 1) * 100).round()} %)' : ''}'),
+              if (r.wideToTatami > 0)
+                Text('${r.wideToTatami} forme(s) trop large(s) pour le satin (> 10 mm) : cousue(s) en tatami',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 12)),
               if (r.lightened.isNotEmpty)
                 Text('Allégé pour rester sous +50 % : ${r.lightened.join(', ')}',
                     style: const TextStyle(color: AppColors.muted, fontSize: 12)),

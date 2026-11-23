@@ -29,6 +29,10 @@ enum StitchMode { auto, satin, tatami }
 /// Largeur maximale (mm) d'une forme brodée en satin en mode automatique.
 const double autoSatinMaxMm = 8;
 
+/// Au-delà, même choisi à la main, le satin devient tatami (points trop longs,
+/// colonnes qui se croisent au centre).
+const double satinMaxMm = 10;
+
 class ShapeInfo {
   final int id; // étiquette dans [ImageAnalysis.labels]
   final int pixels;
@@ -52,9 +56,12 @@ class ShapeInfo {
   /// Épaisseur maximale en mm pour une taille de pixel donnée.
   double widthMm(double pxMm) => 2 * maxRadiusPx * pxMm;
 
+  /// Satin demandé mais forme trop large : cousue en tatami.
+  bool tooWideForSatin(double pxMm) => mode == StitchMode.satin && widthMm(pxMm) > satinMaxMm;
+
   /// Satin ou tatami, une fois le mode automatique résolu.
   bool isSatin(double pxMm) => switch (mode) {
-        StitchMode.satin => true,
+        StitchMode.satin => widthMm(pxMm) <= satinMaxMm,
         StitchMode.tatami => false,
         // Fine et simple : satin. Large, ou ajourée (2 trous ou plus) : tatami.
         StitchMode.auto => widthMm(pxMm) <= autoSatinMaxMm && holes < 2,
@@ -450,7 +457,8 @@ class DigitizeResult {
   final List<int> colorOrder; // groupes dans l'ordre de couture
   final int refStitches; // points du dessin léger de référence (0 si pas de plafond)
   final List<String> lightened; // allègements appliqués pour tenir le plafond
-  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder,
+  int wideToTatami = 0; // formes demandées en satin mais trop larges (> 10 mm)
+  DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder,
       [this.linkLog = const [], this.refStitches = 0, this.lightened = const []]);
 }
 
@@ -463,7 +471,7 @@ DigitizeResult digitizeRequest(DigitizeRequest r) {
   }
 
   final o = r.options;
-  if (o.budget <= 0) return run(o);
+  if (o.budget <= 0) return run(o)..wideToTatami = _wide(r.analysis);
   // Dessin léger de référence : c'est lui qui fixe le nombre de points permis.
   final light = o.copyWith(
     densityMm: math.max(o.densityMm, 0.40),
@@ -497,8 +505,11 @@ DigitizeResult digitizeRequest(DigitizeRequest r) {
     done.add(name);
     res = run(cur, ref, List.of(done));
   }
-  return res;
+  return res..wideToTatami = _wide(r.analysis);
 }
+
+int _wide(ImageAnalysis a) =>
+    a.shapes.where((s) => !s.excluded && s.tooWideForSatin(a.pxMm)).length;
 
 class _P {
   final double x, y;
