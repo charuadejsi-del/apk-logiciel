@@ -337,7 +337,7 @@ void main() {
     expect(a.shapes.length, 5);
     a.setWidthMm(20);
     for (final s in a.shapes) {
-      s.group = s.compactness > 0.6 ? 0 : 1; // A = disques, B = bandes
+      s.group = (s.maxY - s.minY) > 3 * (s.maxX - s.minX) ? 1 : 0; // A = disques, B = bandes
       s.mode = StitchMode.tatami;
       s.overridden = true;
     }
