@@ -1765,9 +1765,12 @@ class _Digitizer {
     // Cases à découvert, sauf la toute première et la toute dernière (au bord même
     // des deux motifs, recouvertes par leur épaisseur).
     var bareCells = 0;
+    bool bare(int cc) => _grid[(cc ~/ bw + y0) * _gw + cc % bw + x0] == 0;
     for (var i = 1; i < cells.length - 1; i++) {
-      final cc = cells[i];
-      if (_grid[(cc ~/ bw + y0) * _gw + cc % bw + x0] == 0) bareCells++;
+      // Une case isolée entre deux motifs couverts (≈ 1 mm, jointure de deux
+      // formes qui se touchent) est cachée par la compensation et le
+      // chevauchement : seuls les vrais passages sur tissu nu sont refusés.
+      if (bare(cells[i]) && (bare(cells[i - 1]) || bare(cells[i + 1]))) bareCells++;
     }
     final cellMm = _gf * a.pxMm;
     if (cells.isEmpty) {
