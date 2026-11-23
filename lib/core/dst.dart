@@ -119,6 +119,8 @@ Uint8List writeDst(EmbPattern pattern) {
   void moveTo(int tx, int ty, int flag) {
     while (true) {
       final dx = tx - cx, dy = ty - cy;
+      // Pas d'enregistrement de saut vide (certains logiciels les refusent).
+      if (flag == _flagJump && dx == 0 && dy == 0) return;
       if (dx.abs() <= maxDstMove && dy.abs() <= maxDstMove) {
         rec(dx, dy, flag);
         cx = tx;

@@ -1,17 +1,25 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
-import '../core/dst.dart';
 import '../core/edits.dart';
 import '../core/pattern.dart';
+import 'export_sheet.dart';
 import 'pattern_painter.dart';
+import 'theme.dart';
 
 class ViewerScreen extends StatefulWidget {
   final EmbPattern pattern;
-  const ViewerScreen({super.key, required this.pattern});
+  final Uint8List? sourceBytes;
+  final String sourceFormat; // 'dst', 'pes', 'pec' ou 'demo'
+
+  const ViewerScreen({
+    super.key,
+    required this.pattern,
+    this.sourceBytes,
+    this.sourceFormat = 'demo',
+  });
 
   @override
   State<ViewerScreen> createState() => _ViewerScreenState();
@@ -22,7 +30,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
   late PatternGeometry _geo;
   late int _progress;
   Timer? _timer;
-  int _speed = 200; // instructions par seconde
+  int _speed = 300; // instructions par seconde
+  bool _realistic = true;
+  bool _modified = false;
   static const int _machineSpm = 800;
 
   @override
@@ -69,71 +79,158 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   Future<void> _smallStitches() async {
     var threshold = 0.4;
-    final result = await showDialog<double>(
+    final result = await showModalBottomSheet<double>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setD) {
           final count = countSmallStitches(_pattern, threshold);
-          return AlertDialog(
-            title: const Text('Supprimer les petits points'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Moins de fils cassés. Les points de début et de fin '
-                    'de chaque segment sont toujours gardés.'),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final t in const [0.3, 0.4, 0.5, 0.6])
-                      ChoiceChip(
-                        label: Text('${t.toStringAsFixed(1)} mm'),
-                        selected: threshold == t,
-                        onSelected: (_) => setD(() => threshold = t),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text('Points concernés : $count',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-              ],
-            ),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
-              FilledButton(
-                onPressed: count == 0 ? null : () => Navigator.pop(ctx, threshold),
-                child: Text(count == 0 ? 'Propre ✓' : 'Supprimer $count points'),
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Supprimer les petits points',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Moins de fils cassés. Le premier et le dernier point de chaque '
+                    'segment sont toujours gardés.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      for (final t in const [0.3, 0.4, 0.5, 0.6])
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: ChoiceChip(
+                              label: Text('${t.toStringAsFixed(1)} mm'),
+                              selected: threshold == t,
+                              selectedColor: AppColors.gold,
+                              labelStyle: TextStyle(
+                                color: threshold == t ? Colors.black : AppColors.text,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              showCheckmark: false,
+                              onSelected: (_) => setD(() => threshold = t),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  LuxCard(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Text('$count',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: count == 0 ? AppColors.success : AppColors.goldLight,
+                            )),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            count == 0
+                                ? 'Aucun petit point : le motif est propre.'
+                                : 'points plus courts que ${threshold.toStringAsFixed(1)} mm',
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  GoldButton(
+                    label: count == 0 ? 'Propre ✓' : 'Supprimer $count points',
+                    icon: Icons.cleaning_services_outlined,
+                    onPressed: count == 0 ? null : () => Navigator.pop(ctx, threshold),
+                  ),
+                ],
               ),
-            ],
+            ),
           );
         },
       ),
     );
     if (result == null || !mounted) return;
     final r = removeSmallStitches(_pattern, result);
-    setState(() => _setPattern(r.pattern));
+    setState(() {
+      _setPattern(r.pattern);
+      _modified = true;
+    });
     _snack('${r.removed} petits points supprimés ✓');
   }
 
-  Future<void> _exportDst() async {
-    try {
-      final bytes = writeDst(_pattern);
-      final name = '${_pattern.name.replaceAll(RegExp(r'[^\w\-]+'), '_')}.dst';
-      final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'Exporter en DST',
-        fileName: name,
-        bytes: bytes,
-      );
-      if (path == null) return;
-      if (!Platform.isAndroid && !Platform.isIOS) {
-        await File(path).writeAsBytes(bytes);
-      }
-      _snack('Fichier DST exporté ✓');
-    } catch (e) {
-      _snack('Échec de l\'export : $e');
-    }
+  void _showColors() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Couleurs',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              Text('${_geo.colors.length} passages de fil, dans l\'ordre de la machine',
+                  style: const TextStyle(color: AppColors.muted)),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.5),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _geo.colors.length,
+                  itemBuilder: (_, i) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: LuxCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              color: _geo.colors[i],
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white24, width: 2),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text('Couleur ${i + 1}')),
+                          Text('${_geo.segmentsOfBlock(i)} points',
+                              style: const TextStyle(color: AppColors.muted)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _export() {
+    final canReuse =
+        !_modified && widget.sourceFormat == 'dst' && widget.sourceBytes != null;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ExportSheet(
+        pattern: _pattern,
+        originalDst: canReuse ? widget.sourceBytes : null,
+      ),
+    );
   }
 
   void _snack(String msg) {
@@ -142,75 +239,223 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   String _duration(Duration d) {
-    final m = d.inMinutes, s = d.inSeconds % 60;
-    return m > 0 ? '$m min ${s.toString().padLeft(2, '0')} s' : '$s s';
+    final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
+    if (h > 0) return '$h h ${m.toString().padLeft(2, '0')}';
+    return m > 0 ? '$m min ${s.toString().padLeft(2, '0')}' : '$s s';
+  }
+
+  String _thousands(int n) {
+    final s = n.toString();
+    final b = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) b.write(' ');
+      b.write(s[i]);
+    }
+    return b.toString();
+  }
+
+  Widget _circleButton(IconData icon, String tip, VoidCallback onTap, {bool active = false}) {
+    return Tooltip(
+      message: tip,
+      child: Material(
+        color: active ? AppColors.gold : AppColors.surface2,
+        shape: const CircleBorder(side: BorderSide(color: AppColors.border)),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, size: 20, color: active ? Colors.black : AppColors.text),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _stat(IconData icon, String value, String label) {
+    return Container(
+      margin: const EdgeInsets.only(right: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: surfaceGradient,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.gold),
+          const SizedBox(width: 8),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(value,
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+              Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final p = _pattern;
+    final fmt = widget.sourceFormat == 'demo' ? 'DÉMO' : widget.sourceFormat.toUpperCase();
     return Scaffold(
-      appBar: AppBar(
-        title: Text(p.name, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            tooltip: 'Supprimer les petits points',
-            icon: const Icon(Icons.cleaning_services_outlined),
-            onPressed: _smallStitches,
-          ),
-          IconButton(
-            tooltip: 'Exporter en DST',
-            icon: const Icon(Icons.save_alt),
-            onPressed: _exportDst,
-          ),
-        ],
-      ),
       body: SafeArea(
         child: Column(
           children: [
+            // En-tête
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 6,
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Row(
                 children: [
-                  _info(Icons.grain, '${p.stitchCount} points'),
-                  _info(Icons.straighten,
-                      '${p.widthMm.toStringAsFixed(1)} × ${p.heightMm.toStringAsFixed(1)} mm'),
-                  _info(Icons.palette_outlined, '${p.colorBlockCount} couleurs'),
-                  _info(Icons.call_split, '${p.jumpCount} sauts'),
-                  _info(Icons.content_cut, '${p.trimCount} coupes'),
-                  _info(Icons.timer_outlined,
-                      '${_duration(p.estimate(_machineSpm))} à $_machineSpm pts/min'),
+                  _circleButton(Icons.arrow_back, 'Retour', () => Navigator.pop(context)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w800)),
+                        Text('$fmt${_modified ? ' · modifié' : ''}',
+                            style: const TextStyle(
+                                color: AppColors.goldLight, fontSize: 12, letterSpacing: 1)),
+                      ],
+                    ),
+                  ),
+                  _circleButton(Icons.view_in_ar, 'Rendu fil réaliste',
+                      () => setState(() => _realistic = !_realistic),
+                      active: _realistic),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 42,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: goldGradient,
+                        borderRadius: BorderRadius.circular(21),
+                      ),
+                      child: TextButton.icon(
+                        onPressed: _export,
+                        icon: const Icon(Icons.download, color: Colors.black, size: 18),
+                        label: const Text('Exporter',
+                            style: TextStyle(
+                                color: Colors.black, fontWeight: FontWeight.w800)),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
+            // Statistiques
+            SizedBox(
+              height: 62,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                children: [
+                  _stat(Icons.grain, _thousands(p.stitchCount), 'points'),
+                  _stat(Icons.straighten,
+                      '${p.widthMm.toStringAsFixed(1)} × ${p.heightMm.toStringAsFixed(1)}',
+                      'mm'),
+                  _stat(Icons.palette_outlined, '${p.colorBlockCount}', 'couleurs'),
+                  _stat(Icons.timer_outlined, _duration(p.estimate(_machineSpm)),
+                      'à $_machineSpm pts/min'),
+                  _stat(Icons.call_split, '${p.jumpCount}', 'sauts'),
+                  _stat(Icons.content_cut, '${p.trimCount}', 'coupes'),
+                ],
+              ),
+            ),
+            // Toile
             Expanded(
               child: Container(
-                margin: const EdgeInsets.all(12),
+                margin: const EdgeInsets.fromLTRB(12, 6, 12, 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF15171C),
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x88000000), blurRadius: 24, offset: Offset(0, 10)),
+                  ],
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: InteractiveViewer(
-                  maxScale: 20,
+                  maxScale: 25,
                   child: SizedBox.expand(
                     child: CustomPaint(
-                      painter: PatternPainter(_geo, _progress, showNeedle: _playing),
+                      painter: PatternPainter(_geo, _progress,
+                          showNeedle: _playing, realistic: _realistic),
                     ),
                   ),
                 ),
               ),
             ),
+            // Outils
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  IconButton.filled(
-                    onPressed: _togglePlay,
-                    icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
-                    tooltip: 'Simuler',
+                  Expanded(
+                    child: LuxCard(
+                      radius: 14,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      onTap: _smallStitches,
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.cleaning_services_outlined,
+                              size: 18, color: AppColors.gold),
+                          SizedBox(width: 8),
+                          Text('Petits points'),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: LuxCard(
+                      radius: 14,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      onTap: _showColors,
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.palette_outlined, size: 18, color: AppColors.gold),
+                          SizedBox(width: 8),
+                          Text('Couleurs'),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Simulation
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              padding: const EdgeInsets.fromLTRB(6, 6, 10, 6),
+              decoration: BoxDecoration(
+                gradient: surfaceGradient,
+                borderRadius: BorderRadius.circular(40),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: _togglePlay,
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: const BoxDecoration(
+                        gradient: goldGradient,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(_playing ? Icons.pause : Icons.play_arrow,
+                          color: Colors.black, size: 28),
+                    ),
                   ),
                   Expanded(
                     child: Slider(
@@ -221,16 +466,19 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     ),
                   ),
                   Text('${_progress + 1}/${_geo.total}',
-                      style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()])),
+                      style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontFeatures: [FontFeature.tabularFigures()])),
                   PopupMenuButton<int>(
                     tooltip: 'Vitesse',
-                    icon: const Icon(Icons.speed),
+                    icon: const Icon(Icons.speed, color: AppColors.gold),
                     initialValue: _speed,
                     onSelected: (v) => setState(() => _speed = v),
                     itemBuilder: (_) => const [
-                      PopupMenuItem(value: 50, child: Text('Lente')),
-                      PopupMenuItem(value: 200, child: Text('Normale')),
-                      PopupMenuItem(value: 1000, child: Text('Rapide')),
+                      PopupMenuItem(value: 80, child: Text('Lente')),
+                      PopupMenuItem(value: 300, child: Text('Normale')),
+                      PopupMenuItem(value: 1500, child: Text('Rapide')),
                     ],
                   ),
                 ],
@@ -241,10 +489,4 @@ class _ViewerScreenState extends State<ViewerScreen> {
       ),
     );
   }
-
-  Widget _info(IconData icon, String text) => Chip(
-        avatar: Icon(icon, size: 16),
-        label: Text(text),
-        visualDensity: VisualDensity.compact,
-      );
 }

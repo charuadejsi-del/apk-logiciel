@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'ui/home_screen.dart';
+import 'ui/theme.dart';
 
 void main() => runApp(const BroderieApp());
 
@@ -12,11 +13,7 @@ class BroderieApp extends StatelessWidget {
     return MaterialApp(
       title: 'Broderie',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorSchemeSeed: const Color(0xFFC9A227),
-      ),
+      theme: buildTheme(),
       home: const HomeScreen(),
     );
   }
