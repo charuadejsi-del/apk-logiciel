@@ -745,6 +745,7 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
     final p = _pattern;
     final fmt = switch (widget.sourceFormat) {
       'demo' => 'DÉMO',
+      'image' => 'IMAGE · TATAMI',
       'texte' => 'TEXTE BRODÉ · ${_design?.fabric.label ?? ''}',
       _ => widget.sourceFormat.toUpperCase(),
     };

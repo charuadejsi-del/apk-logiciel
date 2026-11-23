@@ -8,6 +8,7 @@ import 'package:broderie/core/pes.dart';
 import 'package:broderie/core/font_block.dart';
 import 'package:broderie/core/text_engine.dart';
 import 'package:broderie/core/transform.dart';
+import 'package:broderie/core/image_digitize.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 List<(int, int)> stitchPoints(EmbPattern p) =>
@@ -175,5 +176,49 @@ void main() {
     final r = applyStart(p, StartAnchor.center, returnToStart: true);
     final last = r.stitches[r.stitches.length - 2];
     expect((last.x, last.y, last.type), (0, 0, StitchType.jump));
+  });
+
+  test('image → broderie : formes, cadre ignoré, tatami, taille', () {
+    const w = 300, h = 200;
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    void black(int x, int y) {
+      final i = (y * w + x) * 4;
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+    }
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        // Rectangle plein.
+        if (x >= 40 && x < 120 && y >= 50 && y < 150) black(x, y);
+        // Anneau (forme avec trou).
+        final d = (x - 210) * (x - 210) + (y - 100) * (y - 100);
+        if (d <= 50 * 50 && d >= 25 * 25) black(x, y);
+        // Bandeau collé au bord bas : doit être ignoré.
+        if (y >= 190) black(x, y);
+      }
+    }
+    final a = analyzeImage(DigitizeInput(rgba, w, h, groups: 2));
+    expect(a.shapes.length, 2);
+    a.setWidthMm(100);
+    expect(a.widthMm, closeTo(100, 0.01));
+    final p = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37, 0xFFC8102E]));
+    expect(p.stitchCount, greaterThan(1000));
+    expect(p.widthMm, closeTo(100, 3));
+    expect(p.colors.length, p.colorBlockCount);
+    Stitch? prev;
+    for (final s in p.stitches) {
+      if (s.isStitch && prev != null && prev.isStitch) {
+        expect(distance(prev, s), lessThan(121));
+      }
+      prev = s;
+    }
+    final back = readDst(writeDst(p));
+    expect(back.stitchCount, p.stitchCount);
+    // Une forme retirée n'est pas brodée.
+    a.shapes.first.excluded = true;
+    final q = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37, 0xFFC8102E]));
+    expect(q.stitchCount, lessThan(p.stitchCount));
   });
 }

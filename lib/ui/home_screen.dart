@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../core/demo.dart';
 import '../core/formats.dart';
+import 'image_import_screen.dart';
 import 'text_editor_screen.dart';
 import 'theme.dart';
 import 'viewer_screen.dart';
@@ -187,9 +188,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         _tile(Icons.text_fields, 'Texte brodé', 'Noms en point satin',
                             () => Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const TextEditorScreen()))),
-                        _tile(Icons.dashboard_customize_outlined, 'Modèles',
-                            'Motifs prêts', () => _soon('La bibliothèque de modèles'),
-                            soon: true),
+                        _tile(Icons.image_outlined, 'Image → broderie', 'Dessin noir et blanc',
+                            () => Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const ImageImportScreen()))),
                         _tile(Icons.calculate_outlined, 'Calcul du prix',
                             'Prix au point', () => _soon('Le calcul du prix'),
                             soon: true),
