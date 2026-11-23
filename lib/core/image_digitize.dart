@@ -1750,12 +1750,16 @@ class _Digitizer {
     // Chemin, et longueur parcourue à découvert.
     final cells = <int>[];
     var c = t;
-    var bareCells = 0;
     while (c != s) {
       cells.add(c);
-      final gx = c % bw + x0, gy = c ~/ bw + y0;
-      if (c != t && _grid[gy * _gw + gx] == 0) bareCells++;
       c = prev[c];
+    }
+    // Cases à découvert, sauf la toute première et la toute dernière (au bord même
+    // des deux motifs, recouvertes par leur épaisseur).
+    var bareCells = 0;
+    for (var i = 1; i < cells.length - 1; i++) {
+      final cc = cells[i];
+      if (_grid[(cc ~/ bw + y0) * _gw + cc % bw + x0] == 0) bareCells++;
     }
     final cellMm = _gf * a.pxMm;
     if (cells.isEmpty) {
