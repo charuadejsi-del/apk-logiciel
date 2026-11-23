@@ -1562,10 +1562,19 @@ class _Digitizer {
   late final int _gw = (a.w + _gf - 1) ~/ _gf, _gh = (a.h + _gf - 1) ~/ _gf;
   late final Int32List _grid = () {
     final g = Int32List(_gw * _gh);
+    // Une case est « couverte » si une forme la touche (les fentes de moins d'1 mm
+    // entre deux motifs ne comptent pas comme du tissu à découvert).
     for (var gy = 0; gy < _gh; gy++) {
       for (var gx = 0; gx < _gw; gx++) {
-        final x = math.min(a.w - 1, gx * _gf + _gf ~/ 2), y = math.min(a.h - 1, gy * _gf + _gf ~/ 2);
-        g[gy * _gw + gx] = a.labels[y * a.w + x];
+        var label = 0;
+        for (var sy = 0; sy < 3 && label == 0; sy++) {
+          for (var sx = 0; sx < 3 && label == 0; sx++) {
+            final x = math.min(a.w - 1, gx * _gf + (_gf * (2 * sx + 1)) ~/ 6);
+            final y = math.min(a.h - 1, gy * _gf + (_gf * (2 * sy + 1)) ~/ 6);
+            label = a.labels[y * a.w + x];
+          }
+        }
+        g[gy * _gw + gx] = label;
       }
     }
     return g;
