@@ -27,6 +27,8 @@ enum _Tap { remove, satin, tatami, auto }
 
 class _ImageImportScreenState extends State<ImageImportScreen> {
   _Tap _tap = _Tap.remove;
+  bool _similar = false; // appliquer aux formes semblables
+  Offset? _dragA, _dragB; // sélection rectangulaire
   ImageAnalysis? _a;
   ui.Image? _overlay;
   String? _busy; // message pendant un calcul
@@ -141,18 +143,10 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
           final l = a.labels[yy * a.w + xx];
           if (l > 0) {
             final s = a.shapes[l - 1];
-            switch (_tap) {
-              case _Tap.remove:
-                s.excluded = !s.excluded;
-              case _Tap.satin:
-                s.excluded = false;
-                s.mode = StitchMode.satin;
-              case _Tap.tatami:
-                s.excluded = false;
-                s.mode = StitchMode.tatami;
-              case _Tap.auto:
-                s.excluded = false;
-                s.mode = StitchMode.auto;
+            final targets = _similar ? a.shapes.where((x) => _isSimilar(s, x)).toList() : [s];
+            final removeNow = !s.excluded;
+            for (final t in targets) {
+              _apply(t, removeNow: removeNow);
             }
             _refreshOverlay();
             setState(() {});
@@ -161,6 +155,54 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
         }
       }
     }
+  }
+
+  /// Formes semblables : taille proche, même finesse, même nombre de trous.
+  bool _isSimilar(ShapeInfo a, ShapeInfo b) {
+    final r = b.pixels / math.max(1, a.pixels);
+    return r > 0.6 &&
+        r < 1.67 &&
+        (a.compactness - b.compactness).abs() < 0.15 &&
+        math.min(a.holes, 2) == math.min(b.holes, 2);
+  }
+
+  void _apply(ShapeInfo s, {bool removeNow = true}) {
+    switch (_tap) {
+      case _Tap.remove:
+        s.excluded = removeNow;
+      case _Tap.satin:
+        s.excluded = false;
+        s.mode = StitchMode.satin;
+      case _Tap.tatami:
+        s.excluded = false;
+        s.mode = StitchMode.tatami;
+      case _Tap.auto:
+        s.excluded = false;
+        s.mode = StitchMode.auto;
+    }
+  }
+
+  /// Applique l'outil à toutes les formes dont le centre est dans le rectangle tracé.
+  void _applyRect(Size box) {
+    final a = _a, p = _dragA, q = _dragB;
+    setState(() {
+      _dragA = null;
+      _dragB = null;
+    });
+    if (a == null || p == null || q == null) return;
+    final k = math.min(box.width / a.w, box.height / a.h);
+    final dx = (box.width - a.w * k) / 2, dy = (box.height - a.h * k) / 2;
+    final x0 = (math.min(p.dx, q.dx) - dx) / k, x1 = (math.max(p.dx, q.dx) - dx) / k;
+    final y0 = (math.min(p.dy, q.dy) - dy) / k, y1 = (math.max(p.dy, q.dy) - dy) / k;
+    var n = 0;
+    for (final s in a.shapes) {
+      if (s.cx >= x0 && s.cx <= x1 && s.cy >= y0 && s.cy <= y1) {
+        _apply(s);
+        n++;
+      }
+    }
+    _refreshOverlay();
+    _snack('$n formes modifiées');
   }
 
   void _regroup(int k) {
@@ -399,14 +441,31 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                 builder: (ctx, cons) => GestureDetector(
                                   onTapUp: (d) => _toggleAt(
                                       d.localPosition, Size(cons.maxWidth, cons.maxHeight)),
-                                  child: _overlay == null
-                                      ? const SizedBox.expand()
-                                      : RawImage(
-                                          image: _overlay,
-                                          fit: BoxFit.contain,
-                                          width: cons.maxWidth,
-                                          height: cons.maxHeight,
+                                  onPanStart: (d) => setState(() {
+                                    _dragA = d.localPosition;
+                                    _dragB = d.localPosition;
+                                  }),
+                                  onPanUpdate: (d) => setState(() => _dragB = d.localPosition),
+                                  onPanEnd: (_) => _applyRect(Size(cons.maxWidth, cons.maxHeight)),
+                                  child: Stack(children: [
+                                    if (_overlay != null)
+                                      RawImage(
+                                        image: _overlay,
+                                        fit: BoxFit.contain,
+                                        width: cons.maxWidth,
+                                        height: cons.maxHeight,
+                                      ),
+                                    if (_dragA != null && _dragB != null)
+                                      Positioned.fromRect(
+                                        rect: Rect.fromPoints(_dragA!, _dragB!),
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: const Color(0x33D4AF37),
+                                            border: Border.all(color: AppColors.gold, width: 2),
+                                          ),
                                         ),
+                                      ),
+                                  ]),
                                 ),
                               ),
                             ),
@@ -473,6 +532,24 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                   ),
                               ]),
                             ),
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Row(children: [
+                                Switch(
+                                  value: _similar,
+                                  activeThumbColor: AppColors.gold,
+                                  onChanged: (v) => setState(() => _similar = v),
+                                ),
+                                const SizedBox(width: 6),
+                                const Expanded(
+                                  child: Text(
+                                    'Appliquer aussi aux formes semblables\n'
+                                    'Astuce : glissez le doigt pour sélectionner une zone',
+                                    style: TextStyle(color: AppColors.muted, fontSize: 12),
+                                  ),
+                                ),
+                              ]),
+                            ),
                             _section(
                               'Type de point',
                               Column(
@@ -529,7 +606,7 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                       }
                                     }
                                     return Text(
-                                      '$nS en satin (hachuré) · $nT en tatami (plein)'
+                                      '${nS + nT} motifs : $nS en satin (hachuré) · $nT en tatami (plein)'
                                       '${wide > 0 ? '\n$wide formes larges en satin : points longs divisés automatiquement' : ''}',
                                       style: const TextStyle(color: AppColors.muted, fontSize: 12),
                                     );

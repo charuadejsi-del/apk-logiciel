@@ -40,6 +40,9 @@ class ShapeInfo {
 
   /// Demi-épaisseur maximale de la forme, en pixels.
   double maxRadiusPx = 0;
+
+  /// Nombre de trous (zones blanches fermées) dans la forme.
+  int holes = 0;
   ShapeInfo(this.id, this.pixels, this.minX, this.minY, this.maxX, this.maxY,
       this.compactness);
 
@@ -50,7 +53,8 @@ class ShapeInfo {
   bool isSatin(double pxMm) => switch (mode) {
         StitchMode.satin => true,
         StitchMode.tatami => false,
-        StitchMode.auto => widthMm(pxMm) <= autoSatinMaxMm,
+        // Fine et simple : satin. Large, ou ajourée (2 trous ou plus) : tatami.
+        StitchMode.auto => widthMm(pxMm) <= autoSatinMaxMm && holes < 2,
       };
   double get cx => (minX + maxX) / 2;
   double get cy => (minY + maxY) / 2;
@@ -254,6 +258,16 @@ ImageAnalysis analyzeImage(DigitizeInput input) {
   for (var i = 0; i < w * h; i++) {
     lab[i] = remap[lab[i]];
   }
+  // Trous : zones de fond fermées (assez grandes) entourées par une forme.
+  final holeSeen = <int>{};
+  for (var i = 0; i < w * h; i++) {
+    final l = bgLab[i];
+    if (l == 0 || bgBorder[l] || bgSize[l] < minPixels || holeSeen.contains(l)) continue;
+    holeSeen.add(l);
+    // Le pixel juste à gauche du premier pixel du trou appartient à la forme qui l'entoure.
+    if (i > 0 && lab[i - 1] > 0) shapes[lab[i - 1] - 1].holes++;
+  }
+
   // Épaisseur de chaque forme (distance au bord).
   final dt = chamferDistance(lab, w, h);
   for (var i = 0; i < w * h; i++) {
@@ -691,7 +705,7 @@ class _Digitizer {
     _stitch(_rowPoint(r, toU, v0, spacing));
   }
 
-  void _shape(ShapeInfo s) {
+  void _shape(ShapeInfo s, {_P? next}) {
     final spacing = math.max(1.5, o.densityMm * 10);
     final comp = o.pullCompMm * 10;
     final len = o.stitchMm * 10;
@@ -710,56 +724,67 @@ class _Digitizer {
       return _rowPoint(r, (r.u0 + r.u1) / 2, v0, spacing);
     }
 
-    // Cellule de départ : l'extrémité la plus proche de la position actuelle.
-    var root = 0;
-    var rootTop = true;
-    var bd = double.infinity;
-    for (var i = 0; i < cells.length; i++) {
-      for (final top in const [true, false]) {
-        final dd = endPoint(cells[i], top).dist(cur);
-        if (dd < bd) {
-          bd = dd;
-          root = i;
-          rootTop = top;
+    // Extrémité de cellule la plus proche d'un point.
+    (int, bool) nearestEnd(_P target) {
+      var root = 0;
+      var rootTop = true;
+      var bd = double.infinity;
+      for (var i = 0; i < cells.length; i++) {
+        for (final top in const [true, false]) {
+          final dd = endPoint(cells[i], top).dist(target);
+          if (dd < bd) {
+            bd = dd;
+            root = i;
+            rootTop = top;
+          }
         }
       }
+      return (root, rootTop);
     }
+
     // Parcours en profondeur des cellules ; on retient le côté parent de chacune.
-    final order = <int>[];
-    final fromTop = <int, bool>{}; // la cellule est abordée par le haut ?
-    final seen = <int>{};
-    void visit(int c, bool top) {
-      seen.add(c);
-      order.add(c);
-      fromTop[c] = top;
-      final cell = cells[c];
-      // Voisins : ceux du côté opposé d'abord (on avance), puis les autres.
-      final far = top ? cell.below : cell.above;
-      final nearSide = top ? cell.above : cell.below;
-      for (final nb in far) {
-        if (!seen.contains(nb)) visit(nb, top); // voisin en dessous abordé par le haut
+    (List<int>, Map<int, bool>) dfsFrom(int root, bool rootTop) {
+      final order = <int>[];
+      final fromTop = <int, bool>{}; // la cellule est abordée par le haut ?
+      final seen = <int>{};
+      void visit(int c, bool top) {
+        seen.add(c);
+        order.add(c);
+        fromTop[c] = top;
+        final cell = cells[c];
+        final far = top ? cell.below : cell.above;
+        final nearSide = top ? cell.above : cell.below;
+        for (final nb in far) {
+          if (!seen.contains(nb)) visit(nb, top);
+        }
+        for (final nb in nearSide) {
+          if (!seen.contains(nb)) visit(nb, !top);
+        }
       }
-      for (final nb in nearSide) {
-        if (!seen.contains(nb)) visit(nb, !top);
+
+      visit(root, rootTop);
+      for (var i = 0; i < cells.length; i++) {
+        if (!seen.contains(i)) visit(i, true); // îlots (ne devrait pas arriver)
       }
+      return (order, fromTop);
     }
 
-    visit(root, rootTop);
-    for (var i = 0; i < cells.length; i++) {
-      if (!seen.contains(i)) visit(i, true); // îlots (ne devrait pas arriver)
-    }
+    // Entrée : au plus près de la forme précédente. Sortie : au plus près de la suivante.
+    final (eRoot, eTop) = nearestEnd(cur);
+    final (xRoot, xTop) = next == null ? (eRoot, eTop) : nearestEnd(next);
+    final (uOrder, uFromTop) = dfsFrom(eRoot, eTop);
+    final (fOrder, fFromTop) = dfsFrom(xRoot, xTop);
 
-    // Entrée dans la forme.
-    final entry = endPoint(cells[root], rootTop);
+    final entry = endPoint(cells[eRoot], eTop);
     if (_fresh || cur.dist(entry) > 0.5) _jumpTo(entry);
 
     List<_Row> rowsFrom(_Cell c, bool top) => top ? c.rows : c.rows.reversed.toList();
 
-    // 1. Soutien en point droit sur toute la forme (rangées espacées), en avançant.
+    // 1. Soutien en point droit sur toute la forme (rangées espacées), depuis l'entrée.
     if (o.underlay) {
       final every = math.max(2, (25 / spacing).round()); // ≈ 2,5 mm
-      for (final ci in order) {
-        final rs = rowsFrom(cells[ci], fromTop[ci]!);
+      for (final ci in uOrder) {
+        final rs = rowsFrom(cells[ci], uFromTop[ci]!);
         var forward = true;
         var first = true;
         for (var i = 0; i < rs.length; i++) {
@@ -778,9 +803,9 @@ class _Digitizer {
       }
     }
 
-    // 2. Tatami en revenant (ordre inverse), qui couvre le soutien et les trajets.
-    for (final ci in order.reversed) {
-      final rs = rowsFrom(cells[ci], fromTop[ci]!).reversed.toList(); // du fond vers le parent
+    // 2. Tatami : couvre tout et finit du côté de la forme suivante.
+    for (final ci in fOrder.reversed) {
+      final rs = rowsFrom(cells[ci], fFromTop[ci]!).reversed.toList(); // du fond vers le parent
       var forward = true;
       var first = true;
       for (final r in rs) {
@@ -866,7 +891,7 @@ class _Digitizer {
   /// Satin d'une forme : squelette → colonnes à largeur variable, soutien en point
   /// droit d'abord, puis satin qui revient en couvrant tout. Renvoie false si la
   /// forme ne se prête pas au satin (elle sera alors en tatami).
-  bool _satinShape(ShapeInfo s) {
+  bool _satinShape(ShapeInfo s, {_P? next, bool auto = false}) {
     final x0 = math.max(0, s.minX - 1), y0 = math.max(0, s.minY - 1);
     final x1 = math.min(a.w - 1, s.maxX + 1), y1 = math.min(a.h - 1, s.maxY + 1);
     final bw = x1 - x0 + 1, bh = y1 - y0 + 1;
@@ -1104,6 +1129,9 @@ class _Digitizer {
       es = [(na, na + 1, line)];
     }
 
+    // Forme très ramifiée (dentelle, feuille ajourée) : tatami en mode automatique.
+    if (auto && es.length > 6) return false;
+
     // ── Colonnes : ligne centrale lissée, prolongée, bords par lancer de rayons.
     final deg = <int, int>{};
     for (final e in es) {
@@ -1216,30 +1244,67 @@ class _Digitizer {
       adj.putIfAbsent(es[k].$1, () => []).add(k);
       adj.putIfAbsent(es[k].$2, () => []).add(k);
     }
-    var root = es.first.$1;
-    var bd = double.infinity;
-    for (final n in adj.keys) {
-      final dd = nodeD[n].dist(_fresh ? toD(mx, my) : cur);
-      // On préfère démarrer sur une pointe.
-      final pen = (adj[n]!.length == 1) ? 0.0 : 30.0;
-      if (dd + pen < bd) {
-        bd = dd + pen;
-        root = n;
+    int nearestNode(_P target) {
+      var best = es.first.$1;
+      var bd = double.infinity;
+      for (final n in adj.keys) {
+        // On préfère les pointes.
+        final pen = (adj[n]!.length == 1) ? 0.0 : 30.0;
+        final dd = nodeD[n].dist(target) + pen;
+        if (dd < bd) {
+          bd = dd;
+          best = n;
+        }
       }
-    }
-    final order = <(int, int, int)>[]; // arête, nœud de départ, nœud d'arrivée
-    final usedE = <int>{};
-    void dfs(int n) {
-      for (final k in adj[n] ?? const <int>[]) {
-        if (usedE.contains(k)) continue;
-        usedE.add(k);
-        final other = es[k].$1 == n ? es[k].$2 : es[k].$1;
-        order.add((k, n, other));
-        dfs(other);
-      }
+      return best;
     }
 
-    dfs(root);
+    final entryN = nearestNode(cur);
+    final exitN = next == null ? entryN : nearestNode(next);
+
+    List<(int, int, int)> dfsFrom(int start) {
+      final order = <(int, int, int)>[]; // arête, nœud de départ, nœud d'arrivée
+      final usedE = <int>{};
+      void dfs(int n) {
+        for (final k in adj[n] ?? const <int>[]) {
+          if (usedE.contains(k)) continue;
+          usedE.add(k);
+          final other = es[k].$1 == n ? es[k].$2 : es[k].$1;
+          order.add((k, n, other));
+          dfs(other);
+        }
+      }
+
+      dfs(start);
+      return order;
+    }
+
+    // Colonne simple (point, feuille, trait) traversée : entrée d'un bout, sortie de l'autre.
+    if (es.length == 1 && es[0].$1 != es[0].$2 && entryN != exitN) {
+      final fwd = es[0].$1 == entryN;
+      final (_, cen0, le0, ri0) = cols[0];
+      final cen = fwd ? cen0 : cen0.reversed.toList();
+      final le = fwd ? le0 : le0.reversed.toList();
+      final ri = fwd ? ri0 : ri0.reversed.toList();
+      _jumpTo(nodeD[entryN]);
+      if (o.underlay) {
+        // Point droit à l'aller sur un bord, au retour sur l'autre (sous le satin).
+        _runPoly([
+          for (var i = 0; i < cen.length; i++)
+            _P(cen[i].x + (le[i].x - cen[i].x) * 0.55, cen[i].y + (le[i].y - cen[i].y) * 0.55),
+        ]);
+        _runPoly([
+          for (var i = cen.length - 1; i >= 0; i--)
+            _P(cen[i].x + (ri[i].x - cen[i].x) * 0.55, cen[i].y + (ri[i].y - cen[i].y) * 0.55),
+        ]);
+      }
+      _satinColumn(cen, le, ri);
+      return true;
+    }
+
+    // Satin : parcours enraciné sur la sortie, pour finir près de la forme suivante.
+    final order = dfsFrom(exitN);
+    final under = dfsFrom(entryN);
 
     List<_P> centerPath(int k, int from) {
       final r = cols[k].$1;
@@ -1286,15 +1351,20 @@ class _Digitizer {
     }
 
     final all = {for (var k = 0; k < es.length; k++) k};
-    _jumpTo(nodeD[root]);
-    var at = root;
+    _jumpTo(nodeD[entryN]);
+    var at = entryN;
+    final satinStart = order.isEmpty ? exitN : order.last.$3;
     if (o.underlay) {
-      for (final (k, from, to) in order) {
+      // Point droit sur toute la forme depuis l'entrée…
+      for (final (k, from, to) in under) {
         if (at != from) _runPoly(route(at, from, all) ?? [nodeD[from]]);
         _runPoly(centerPath(k, from));
         at = to;
       }
     }
+    // … puis jusqu'au début du satin.
+    if (at != satinStart) _runPoly(route(at, satinStart, all) ?? [nodeD[satinStart]]);
+    at = satinStart;
     final notDone = {...all};
     for (final (k, from, to) in order.reversed) {
       if (at != to) {
@@ -1355,6 +1425,25 @@ class _Digitizer {
     }
   }
 
+  /// Pixel de la forme [s] le plus proche de [p] (échantillonné pour aller vite).
+  _P _nearestPixel(ShapeInfo s, _P p) {
+    var best = pixelCenter(s.cx.round(), s.cy.round());
+    var bd = double.infinity;
+    final stepPx = math.max(1, ((s.maxX - s.minX) + (s.maxY - s.minY)) ~/ 60);
+    for (var y = s.minY; y <= s.maxY; y += stepPx) {
+      for (var x = s.minX; x <= s.maxX; x += stepPx) {
+        if (a.labels[y * a.w + x] != s.id) continue;
+        final q = pixelCenter(x, y);
+        final dd = q.dist(p);
+        if (dd < bd) {
+          bd = dd;
+          best = q;
+        }
+      }
+    }
+    return best;
+  }
+
   EmbPattern build(String name) {
     final groups = <int>{for (final s in a.shapes) if (!s.excluded) s.group}.toList()..sort();
     final colors = <int>[];
@@ -1370,21 +1459,31 @@ class _Digitizer {
       }
       colors.add(o.groupColors.isEmpty ? defaultPalette[g % defaultPalette.length]
           : o.groupColors[g % o.groupColors.length]);
-      // Formes du groupe : la plus proche à chaque fois.
+      // Ordre des formes du groupe : chaîne de la plus proche en la plus proche.
       final left = [...members];
+      final seq = <ShapeInfo>[];
+      var pos = out.isEmpty ? pixelCenter(0, 0) : cur;
       while (left.isNotEmpty) {
         var bi = 0;
         var bd = double.infinity;
         for (var i = 0; i < left.length; i++) {
-          final c = pixelCenter(left[i].cx.round(), left[i].cy.round());
-          final dd = out.isEmpty ? c.x + c.y : c.dist(cur); // 1re forme : en haut à gauche
+          final dd = pixelCenter(left[i].cx.round(), left[i].cy.round()).dist(pos);
           if (dd < bd) {
             bd = dd;
             bi = i;
           }
         }
         final sh = left.removeAt(bi);
-        if (!(sh.isSatin(a.pxMm) && _satinShape(sh))) _shape(sh);
+        seq.add(sh);
+        pos = pixelCenter(sh.cx.round(), sh.cy.round());
+      }
+      for (var i = 0; i < seq.length; i++) {
+        final sh = seq[i];
+        // Point de sortie visé : le bord de la forme suivante le plus proche.
+        final next = i + 1 < seq.length ? _nearestPixel(seq[i + 1], pixelCenter(sh.cx.round(), sh.cy.round())) : null;
+        final satin = sh.isSatin(a.pxMm) &&
+            _satinShape(sh, next: next, auto: sh.mode == StitchMode.auto);
+        if (!satin) _shape(sh, next: next);
       }
       firstGroup = false;
     }

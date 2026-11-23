@@ -265,4 +265,51 @@ void main() {
     final tat = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37]));
     expect(tat.stitchCount, isNot(satin.stitchCount));
   });
+
+  test('image : forme ajourée → tatami auto ; chaîne de points → sauts courts', () {
+    const w = 300, h = 400;
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    void black(int x, int y) {
+      final i = (y * w + x) * 4;
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+    }
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        // Grille : cadre + 2 barres = 3 trous, barres fines.
+        final inFrame = x >= 20 && x < 140 && y >= 20 && y < 200;
+        final bar = x < 28 || x >= 132 || y < 28 || y >= 192 || (y >= 80 && y < 88) || (y >= 136 && y < 144);
+        if (inFrame && bar) black(x, y);
+        // Chaîne verticale de 5 points.
+        for (var k = 0; k < 5; k++) {
+          final cy = 40 + k * 70;
+          if ((x - 230) * (x - 230) + (y - cy) * (y - cy) <= 18 * 18) black(x, y);
+        }
+      }
+    }
+    final a = analyzeImage(DigitizeInput(rgba, w, h, groups: 2));
+    a.setWidthMm(100);
+    final grid = a.shapes.firstWhere((s) => s.holes >= 2);
+    expect(grid.holes, 3);
+    expect(grid.isSatin(a.pxMm), isFalse);
+    // Seulement les points : les sauts entre deux points restent courts.
+    for (final s in a.shapes) {
+      s.excluded = s.holes > 0;
+      s.group = 0;
+    }
+    final p = digitize(a, const DigitizeOptions(groupColors: [0xFF0B3D91]));
+    final pitch = 70 * a.pxMm * 10; // écart entre centres, en 0,1 mm
+    Stitch? prev;
+    var jumps = 0;
+    for (final s in p.stitches) {
+      if (s.type == StitchType.jump && prev != null) {
+        expect(distance(prev, s), lessThan(pitch * 0.75), reason: 'saut trop long');
+        jumps++;
+      }
+      prev = s;
+    }
+    expect(jumps, greaterThanOrEqualTo(4));
+  });
 }
