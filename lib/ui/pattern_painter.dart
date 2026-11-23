@@ -2,40 +2,61 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/pattern.dart';
 import 'theme.dart';
 
-/// Géométrie pré-calculée : segments cousus regroupés par bloc de couleur.
+/// Nombre de nuances de reflet selon l'orientation du point.
+const int _shades = 4;
+const List<double> _shadeFactor = [0.70, 0.86, 1.0, 1.16];
+
+/// Géométrie pré-calculée une seule fois : segments cousus par bloc de couleur,
+/// et, pour le rendu réaliste, répartis par nuance selon leur angle (reflet du fil).
 class PatternGeometry {
   final List<Float32List> points; // 4 valeurs par segment
   final List<Int32List> endIndex; // index de l'instruction qui termine le segment
+  final List<List<Float32List>> shadePoints;
+  final List<List<Int32List>> shadeEnd;
   final List<Color> colors;
   final Bounds bounds;
   final List<Stitch> stitches;
 
-  PatternGeometry._(this.points, this.endIndex, this.colors, this.bounds, this.stitches);
+  PatternGeometry._(this.points, this.endIndex, this.shadePoints, this.shadeEnd,
+      this.colors, this.bounds, this.stitches);
 
   factory PatternGeometry.from(EmbPattern p) {
     final pts = <List<double>>[<double>[]];
     final ends = <List<int>>[<int>[]];
+    List<List<double>> newShadePts() => [for (var i = 0; i < _shades; i++) <double>[]];
+    List<List<int>> newShadeEnds() => [for (var i = 0; i < _shades; i++) <int>[]];
+    final sPts = <List<List<double>>>[newShadePts()];
+    final sEnd = <List<List<int>>>[newShadeEnds()];
     var block = 0;
     Stitch? prev;
+    const light = 40 * math.pi / 180; // lumière venant du haut à gauche
     for (var i = 0; i < p.stitches.length; i++) {
       final s = p.stitches[i];
       switch (s.type) {
         case StitchType.stitch:
           if (prev != null && prev.isStitch) {
-            pts[block].addAll([
-              prev.x.toDouble(), prev.y.toDouble(), s.x.toDouble(), s.y.toDouble()
-            ]);
+            final x0 = prev.x.toDouble(), y0 = prev.y.toDouble();
+            final x1 = s.x.toDouble(), y1 = s.y.toDouble();
+            pts[block].addAll([x0, y0, x1, y1]);
             ends[block].add(i);
+            final a = math.atan2(y1 - y0, x1 - x0);
+            final b = math.cos(a - light).abs();
+            final shade = math.min(_shades - 1, (b * _shades).floor());
+            sPts[block][shade].addAll([x0, y0, x1, y1]);
+            sEnd[block][shade].add(i);
           }
         case StitchType.colorChange:
           block++;
           pts.add(<double>[]);
           ends.add(<int>[]);
+          sPts.add(newShadePts());
+          sEnd.add(newShadeEnds());
         case StitchType.jump:
         case StitchType.trim:
         case StitchType.end:
@@ -46,6 +67,8 @@ class PatternGeometry {
     return PatternGeometry._(
       [for (final l in pts) Float32List.fromList(l)],
       [for (final l in ends) Int32List.fromList(l)],
+      [for (final b in sPts) [for (final l in b) Float32List.fromList(l)]],
+      [for (final b in sEnd) [for (final l in b) Int32List.fromList(l)]],
       [for (var b = 0; b < pts.length; b++) Color(p.colorOfBlock(b))],
       p.bounds,
       p.stitches,
@@ -53,6 +76,7 @@ class PatternGeometry {
   }
 
   int get total => stitches.length;
+  int segmentsOfBlock(int b) => endIndex[b].length;
 
   Stitch? get lastStitch {
     for (var i = stitches.length - 1; i >= 0; i--) {
@@ -60,10 +84,10 @@ class PatternGeometry {
     }
     return null;
   }
-  int segmentsOfBlock(int b) => endIndex[b].length;
 }
 
 int _countUpTo(Int32List ends, int progress) {
+  if (ends.isEmpty || ends.last <= progress) return ends.length;
   var lo = 0, hi = ends.length;
   while (lo < hi) {
     final mid = (lo + hi) >> 1;
@@ -76,18 +100,32 @@ int _countUpTo(Int32List ends, int progress) {
   return lo;
 }
 
+Color _shadeOf(Color c, double f) => f < 1
+    ? Color.lerp(c, Colors.black, 1 - f)!
+    : Color.lerp(c, Colors.white, f - 1)!;
+
+/// Peintre du motif. La progression est une [ValueListenable] : pendant la
+/// simulation, seule la toile est redessinée, pas l'écran entier.
 class PatternPainter extends CustomPainter {
   final PatternGeometry g;
-  final int progress; // index de la dernière instruction affichée
+  final ValueListenable<int>? progress;
+  final int? fixedProgress;
   final bool showNeedle;
   final bool realistic;
   final bool showStartEnd;
 
-  PatternPainter(this.g, this.progress,
-      {this.showNeedle = false, this.realistic = true, this.showStartEnd = false});
+  PatternPainter(
+    this.g, {
+    this.progress,
+    this.fixedProgress,
+    this.showNeedle = false,
+    this.realistic = true,
+    this.showStartEnd = false,
+  }) : super(repaint: progress);
 
   @override
   void paint(Canvas canvas, Size size) {
+    final prog = progress?.value ?? fixedProgress ?? g.total - 1;
     final b = g.bounds;
     final w = math.max(b.width, 10).toDouble();
     final h = math.max(b.height, 10).toDouble();
@@ -103,41 +141,56 @@ class PatternPainter extends CustomPainter {
 
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeCap = StrokeCap.butt
+      ..isAntiAlias = true;
+
     for (var k = 0; k < g.points.length; k++) {
-      final n = _countUpTo(g.endIndex[k], progress);
+      final n = _countUpTo(g.endIndex[k], prog);
       if (n == 0) continue;
-      final pts = Float32List.sublistView(g.points[k], 0, n * 4);
       final c = g.colors[k];
-      if (realistic) {
-        // Ombre du fil, corps, puis reflet : effet de fil brodé.
-        paint
-          ..color = Color.lerp(c, Colors.black, 0.6)!
-          ..strokeWidth = 4.6;
-        canvas.drawRawPoints(ui.PointMode.lines, pts, paint);
+      if (!realistic) {
         paint
           ..color = c
-          ..strokeWidth = 3.4;
-        canvas.drawRawPoints(ui.PointMode.lines, pts, paint);
-        canvas.save();
-        canvas.translate(-0.5, -0.6);
-        paint
-          ..color = Color.lerp(c, Colors.white, 0.5)!.withValues(alpha: 0.75)
-          ..strokeWidth = 1.1;
-        canvas.drawRawPoints(ui.PointMode.lines, pts, paint);
-        canvas.restore();
-      } else {
-        paint
-          ..color = c
-          ..strokeWidth = 2.4;
-        canvas.drawRawPoints(ui.PointMode.lines, pts, paint);
+          ..strokeWidth = 2.6;
+        canvas.drawRawPoints(
+            ui.PointMode.lines, Float32List.sublistView(g.points[k], 0, n * 4), paint);
+        continue;
       }
+      // 1. Ombre portée du fil.
+      paint
+        ..color = Color.lerp(c, Colors.black, 0.65)!
+        ..strokeWidth = 4.4;
+      canvas.drawRawPoints(
+          ui.PointMode.lines, Float32List.sublistView(g.points[k], 0, n * 4), paint);
+      // 2. Corps du fil, nuancé selon l'orientation (reflet satiné).
+      paint.strokeWidth = 3.2;
+      for (var s = 0; s < _shades; s++) {
+        final m = _countUpTo(g.shadeEnd[k][s], prog);
+        if (m == 0) continue;
+        paint.color = _shadeOf(c, _shadeFactor[s]);
+        canvas.drawRawPoints(ui.PointMode.lines,
+            Float32List.sublistView(g.shadePoints[k][s], 0, m * 4), paint);
+      }
+      // 3. Reflet fin sur le dessus du fil.
+      canvas.save();
+      canvas.translate(-0.45, -0.55);
+      paint.strokeWidth = 0.9;
+      for (var s = 0; s < _shades; s++) {
+        final m = _countUpTo(g.shadeEnd[k][s], prog);
+        if (m == 0) continue;
+        paint.color = Color.lerp(c, Colors.white, 0.35 + 0.12 * s)!
+            .withValues(alpha: 0.35 + 0.15 * s);
+        canvas.drawRawPoints(ui.PointMode.lines,
+            Float32List.sublistView(g.shadePoints[k][s], 0, m * 4), paint);
+      }
+      canvas.restore();
     }
 
     if (showStartEnd) {
       final r = 7 / scale;
-      // Départ (origine machine) : anneau vert. Fin : point rouge.
-      canvas.drawCircle(Offset.zero, r * 1.6,
+      canvas.drawCircle(
+          Offset.zero,
+          r * 1.6,
           Paint()
             ..color = const Color(0xFF4ADE80)
             ..style = PaintingStyle.stroke
@@ -149,12 +202,11 @@ class PatternPainter extends CustomPainter {
       }
     }
 
-    if (showNeedle && progress >= 0 && progress < g.total) {
-      final s = g.stitches[progress];
+    if (showNeedle && prog >= 0 && prog < g.total) {
+      final s = g.stitches[prog];
       final o = Offset(s.x.toDouble(), s.y.toDouble());
       final r = 7 / scale;
-      canvas.drawCircle(o, r * 2.6,
-          Paint()..color = AppColors.gold.withValues(alpha: 0.18));
+      canvas.drawCircle(o, r * 2.6, Paint()..color = AppColors.gold.withValues(alpha: 0.18));
       canvas.drawCircle(o, r, Paint()..color = AppColors.goldLight);
     }
     canvas.restore();
@@ -193,6 +245,7 @@ class PatternPainter extends CustomPainter {
   bool shouldRepaint(PatternPainter old) =>
       old.g != g ||
       old.progress != progress ||
+      old.fixedProgress != fixedProgress ||
       old.showNeedle != showNeedle ||
       old.realistic != realistic ||
       old.showStartEnd != showStartEnd;

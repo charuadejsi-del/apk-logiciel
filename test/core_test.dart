@@ -91,7 +91,12 @@ void main() {
     final b = p.bounds;
     expect(((b.minX + b.maxX) / 2).abs(), lessThan(20));
     expect(((b.minY + b.maxY) / 2).abs(), lessThan(20));
-    expect(p.trimCount, greaterThanOrEqualTo(8));
+    final none = d.copyWith(trimMode: TrimMode.none).generate();
+    expect(none.trimCount, 1); // une seule coupe, à la fin
+    final all = d.copyWith(trimMode: TrimMode.all).generate();
+    expect(all.trimCount, greaterThanOrEqualTo(9));
+    final auto30 = d.copyWith(trimMode: TrimMode.auto, jumpMaxMm: 30).generate();
+    expect(auto30.trimCount, lessThan(all.trimCount));
     final back = readDst(writeDst(p));
     expect(back.stitchCount, p.stitchCount);
   });

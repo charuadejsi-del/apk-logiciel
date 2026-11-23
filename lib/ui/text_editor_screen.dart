@@ -164,9 +164,12 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
                   ? const Center(
                       child: Text('Tapez un nom',
                           style: TextStyle(color: AppColors.muted)))
-                  : CustomPaint(
-                      painter: PatternPainter(_g, _g.total - 1, realistic: true),
-                      child: const SizedBox.expand(),
+                  : RepaintBoundary(
+                      child: CustomPaint(
+                        isComplex: true,
+                        painter: PatternPainter(_g, realistic: true),
+                        child: const SizedBox.expand(),
+                      ),
                     ),
             ),
             Padding(
@@ -178,7 +181,7 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
                       style: const TextStyle(fontWeight: FontWeight.w700)),
                   Text('${p.widthMm.toStringAsFixed(1)} × ${p.heightMm.toStringAsFixed(1)} mm',
                       style: const TextStyle(color: AppColors.muted)),
-                  Text('${p.trimCount} coupes',
+                  Text('${p.trimCount} coupes · ${p.jumpCount} sauts',
                       style: const TextStyle(color: AppColors.muted)),
                 ],
               ),
@@ -285,6 +288,49 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
                       ],
                     ),
                     value: '${_d.effectiveDensityMm.toStringAsFixed(2)} mm',
+                  ),
+                  _section(
+                    'Coupes du fil',
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          children: [
+                            for (final m in TrimMode.values)
+                              _chip(m.label, _d.trimMode == m,
+                                  () => _update(_d.copyWith(trimMode: m))),
+                          ],
+                        ),
+                        if (_d.trimMode != TrimMode.none) ...[
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text('Couper seulement au-delà de',
+                                    style: TextStyle(color: AppColors.muted, fontSize: 13)),
+                              ),
+                              Text('${_d.jumpMaxMm.toStringAsFixed(0)} mm',
+                                  style: const TextStyle(
+                                      color: AppColors.goldLight,
+                                      fontWeight: FontWeight.w800)),
+                            ],
+                          ),
+                          Slider(
+                            value: _d.jumpMaxMm.clamp(1.0, 30.0).toDouble(),
+                            min: 1,
+                            max: 30,
+                            divisions: 29,
+                            onChanged: (v) => _update(_d.copyWith(jumpMaxMm: v)),
+                          ),
+                        ],
+                        Text(
+                          _d.trimMode == TrimMode.none
+                              ? 'Aucune coupe : petits sauts entre les lettres, une seule coupe à la fin.'
+                              : 'En dessous de cette distance : petit saut sans couper le fil.',
+                          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    value: '${p.trimCount} coupes · ${p.jumpCount} sauts',
                   ),
                   _section(
                     'Couleur du fil',

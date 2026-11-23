@@ -1,7 +1,7 @@
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../core/edits.dart';
 import '../core/pattern.dart';
@@ -32,15 +32,18 @@ class ViewerScreen extends StatefulWidget {
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
 
-class _ViewerScreenState extends State<ViewerScreen> {
+class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderStateMixin {
   late EmbPattern _base; // motif sans réglage du point de départ
   TextDesign? _design;
   late StartAnchor _anchor;
   bool _returnToStart = false;
   late EmbPattern _pattern;
   late PatternGeometry _geo;
-  late int _progress;
-  Timer? _timer;
+  final ValueNotifier<int> _prog = ValueNotifier<int>(0);
+  int get _progress => _prog.value;
+  set _progress(int v) => _prog.value = v;
+  late final Ticker _ticker = createTicker(_onTick);
+  int _playFrom = 0;
   int _speed = 300; // instructions par seconde
   bool _realistic = true;
   bool _modified = false;
@@ -60,6 +63,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   void _rebuild() {
+    if (_ticker.isActive) _ticker.stop();
     _pattern = applyStart(_base, _anchor, returnToStart: _returnToStart);
     _geo = PatternGeometry.from(_pattern);
     _progress = _geo.total - 1;
@@ -75,31 +79,34 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _ticker.dispose();
+    _prog.dispose();
     super.dispose();
   }
 
-  bool get _playing => _timer != null;
+  bool get _playing => _ticker.isActive;
+
+  /// Avance de la simulation, synchronisée sur l'écran : seule la toile est redessinée.
+  void _onTick(Duration elapsed) {
+    final p = _playFrom + (elapsed.inMicroseconds * _speed / 1e6).round();
+    if (p >= _geo.total - 1) {
+      _progress = _geo.total - 1;
+      _ticker.stop();
+      setState(() {});
+    } else {
+      _progress = p;
+    }
+  }
 
   void _togglePlay() {
     if (_playing) {
-      setState(() {
-        _timer?.cancel();
-        _timer = null;
-      });
+      _ticker.stop();
+      setState(() {});
       return;
     }
     if (_progress >= _geo.total - 1) _progress = 0;
-    _timer = Timer.periodic(const Duration(milliseconds: 33), (_) {
-      setState(() {
-        _progress += (_speed * 0.033).ceil();
-        if (_progress >= _geo.total - 1) {
-          _progress = _geo.total - 1;
-          _timer?.cancel();
-          _timer = null;
-        }
-      });
-    });
+    _playFrom = _progress;
+    _ticker.start();
     setState(() {});
   }
 
@@ -822,12 +829,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: InteractiveViewer(
                   maxScale: 25,
-                  child: SizedBox.expand(
-                    child: CustomPaint(
-                      painter: PatternPainter(_geo, _progress,
-                          showNeedle: _playing,
-                          realistic: _realistic,
-                          showStartEnd: !_playing),
+                  child: RepaintBoundary(
+                    child: SizedBox.expand(
+                      child: CustomPaint(
+                        isComplex: true,
+                        willChange: _playing,
+                        painter: PatternPainter(_geo,
+                            progress: _prog,
+                            showNeedle: _playing,
+                            realistic: _realistic,
+                            showStartEnd: !_playing),
+                      ),
                     ),
                   ),
                 ),
@@ -873,23 +885,40 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     ),
                   ),
                   Expanded(
-                    child: Slider(
-                      value: _progress.clamp(0, _geo.total - 1).toDouble(),
-                      min: 0,
-                      max: (_geo.total - 1).clamp(1, 1 << 30).toDouble(),
-                      onChanged: (v) => setState(() => _progress = v.round()),
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _prog,
+                      builder: (_, v, __) => Slider(
+                        value: v.clamp(0, _geo.total - 1).toDouble(),
+                        min: 0,
+                        max: (_geo.total - 1).clamp(1, 1 << 30).toDouble(),
+                        onChanged: (x) {
+                          if (_playing) _ticker.stop();
+                          _progress = x.round();
+                        },
+                        onChangeEnd: (_) => setState(() {}),
+                      ),
                     ),
                   ),
-                  Text('${_progress + 1}/${_geo.total}',
-                      style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                          fontFeatures: [FontFeature.tabularFigures()])),
+                  ValueListenableBuilder<int>(
+                    valueListenable: _prog,
+                    builder: (_, v, __) => Text('${v + 1}/${_geo.total}',
+                        style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
+                            fontFeatures: [FontFeature.tabularFigures()])),
+                  ),
                   PopupMenuButton<int>(
                     tooltip: 'Vitesse',
                     icon: const Icon(Icons.speed, color: AppColors.gold),
                     initialValue: _speed,
-                    onSelected: (v) => setState(() => _speed = v),
+                    onSelected: (v) => setState(() {
+                      _speed = v;
+                      if (_playing) {
+                        _ticker.stop();
+                        _playFrom = _progress;
+                        _ticker.start();
+                      }
+                    }),
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 80, child: Text('Lente')),
                       PopupMenuItem(value: 300, child: Text('Normale')),

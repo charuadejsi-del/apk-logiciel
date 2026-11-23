@@ -131,7 +131,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return Scaffold(
       body: Stack(
         children: [
-          const Positioned.fill(child: CustomPaint(painter: _BackdropPainter())),
+          const Positioned.fill(
+              child: RepaintBoundary(child: CustomPaint(painter: _BackdropPainter()))),
           SafeArea(
             child: Center(
               child: ConstrainedBox(
@@ -139,7 +140,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(22, 36, 22, 24),
                   children: [
-                    Center(child: _logo()),
+                    Center(child: RepaintBoundary(child: _logo())),
                     const SizedBox(height: 22),
                     ShaderMask(
                       shaderCallback: (r) => goldGradient.createShader(r),

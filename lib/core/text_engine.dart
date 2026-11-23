@@ -47,6 +47,17 @@ extension FabricInfo on Fabric {
       this == Fabric.casquette;
 }
 
+/// Coupe du fil entre les lettres.
+enum TrimMode { none, auto, all }
+
+extension TrimModeInfo on TrimMode {
+  String get label => switch (this) {
+        TrimMode.none => 'Aucune',
+        TrimMode.auto => 'Selon la distance',
+        TrimMode.all => 'Entre chaque lettre',
+      };
+}
+
 /// Paramètres d'un texte brodé. Tout le motif est recalculé à partir d'eux.
 class TextDesign {
   final String text;
@@ -59,6 +70,12 @@ class TextDesign {
   final Fabric fabric;
   final int color;
 
+  /// Coupe du fil : jamais, au-delà de [jumpMaxMm], ou entre chaque lettre.
+  final TrimMode trimMode;
+
+  /// Distance au-delà de laquelle le fil est coupé (mode « selon la distance »).
+  final double jumpMaxMm;
+
   const TextDesign({
     this.text = 'FARES',
     this.heightMm = 20,
@@ -69,6 +86,8 @@ class TextDesign {
     this.densityMm = 0.40,
     this.fabric = Fabric.coton,
     this.color = 0xFFD4AF37,
+    this.trimMode = TrimMode.auto,
+    this.jumpMaxMm = 5,
   });
 
   TextDesign copyWith({
@@ -81,6 +100,8 @@ class TextDesign {
     double? densityMm,
     Fabric? fabric,
     int? color,
+    TrimMode? trimMode,
+    double? jumpMaxMm,
   }) =>
       TextDesign(
         text: text ?? this.text,
@@ -92,6 +113,8 @@ class TextDesign {
         densityMm: densityMm ?? this.densityMm,
         fabric: fabric ?? this.fabric,
         color: color ?? this.color,
+        trimMode: trimMode ?? this.trimMode,
+        jumpMaxMm: jumpMaxMm ?? this.jumpMaxMm,
       );
 
   String get normalized => text.toUpperCase();
@@ -336,12 +359,20 @@ class _TextBuilder {
       _lockIn(p, dir);
       return;
     }
-    if (sameLetter && p.dist(cur) <= connectMax) {
+    final dist = p.dist(cur);
+    if (sameLetter && dist <= connectMax) {
       _stitch(p);
       return;
     }
+    final limit = d.jumpMaxMm * 10;
+    final cut = switch (d.trimMode) {
+      TrimMode.none => false,
+      TrimMode.auto => dist > limit,
+      // Entre chaque lettre ; à l'intérieur d'une lettre, seulement si c'est loin.
+      TrimMode.all => sameLetter ? dist > limit : true,
+    };
     _lockOff();
-    out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.trim));
+    if (cut) out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.trim));
     out.add(Stitch(p.x.round(), p.y.round(), StitchType.jump));
     cur = p;
     _lockIn(p, dir);
