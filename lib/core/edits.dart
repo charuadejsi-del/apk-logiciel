@@ -24,7 +24,7 @@ EditResult removeSmallStitches(EmbPattern p, double thresholdMm) {
     final prevKept = out.isEmpty ? null : out.last;
     final isFirstOfRun = prevKept == null || !prevKept.isStitch;
     final isLastOfRun = i + 1 >= src.length || !src[i + 1].isStitch;
-    if (isFirstOfRun || isLastOfRun || distance(prevKept!, s) >= limit) {
+    if (isFirstOfRun || isLastOfRun || distance(prevKept, s) >= limit) {
       out.add(s);
     } else {
       removed++;

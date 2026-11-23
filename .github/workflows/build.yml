@@ -24,6 +24,7 @@ jobs:
       - name: Generate platform folders
         run: |
           flutter create --platforms=android,windows --org com.broderie --project-name broderie .
+          rm -f test/widget_test.dart
           sed -i 's/android:label="broderie"/android:label="Broderie"/' android/app/src/main/AndroidManifest.xml
           if [ -f android/build.gradle.kts ]; then F=android/build.gradle.kts; else F=android/build.gradle; fi
           printf '\nsubprojects {\n    tasks.matching { it.name.contains("lintVital") }.configureEach { enabled = false }\n}\n' >> $F
