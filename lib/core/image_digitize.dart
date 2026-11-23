@@ -391,6 +391,11 @@ class DigitizeOptions {
   final double angleDeg; // angle des rangées
   final double pullCompMm;
   final bool underlay;
+  final double underlayMm; // écart entre rangées de soutien du tatami
+  final bool contourRun; // point droit sur le contour avant le tatami
+  /// Plafond de points : au plus `budget` × le dessin léger de référence
+  /// (densité 0,40, soutien 2,5 mm, sans contour). 0 = pas de plafond.
+  final double budget;
   final TrimMode trimMode;
   final double jumpMaxMm;
   const DigitizeOptions({
@@ -400,9 +405,34 @@ class DigitizeOptions {
     this.angleDeg = -1, // < 0 : angle automatique selon chaque forme
     this.pullCompMm = 0.3,
     this.underlay = true,
+    this.underlayMm = 2.5,
+    this.contourRun = true,
+    this.budget = 1.5,
     this.trimMode = TrimMode.auto,
     this.jumpMaxMm = 5,
   });
+
+  DigitizeOptions copyWith({
+    double? densityMm,
+    double? pullCompMm,
+    bool? underlay,
+    double? underlayMm,
+    bool? contourRun,
+    double? budget,
+  }) =>
+      DigitizeOptions(
+        groupColors: groupColors,
+        densityMm: densityMm ?? this.densityMm,
+        stitchMm: stitchMm,
+        angleDeg: angleDeg,
+        pullCompMm: pullCompMm ?? this.pullCompMm,
+        underlay: underlay ?? this.underlay,
+        underlayMm: underlayMm ?? this.underlayMm,
+        contourRun: contourRun ?? this.contourRun,
+        budget: budget ?? this.budget,
+        trimMode: trimMode,
+        jumpMaxMm: jumpMaxMm,
+      );
 }
 
 class DigitizeRequest {
@@ -418,14 +448,56 @@ class DigitizeResult {
   final EmbPattern pattern;
   final int hiddenRuns; // liaisons en point droit cachées (sans saut ni coupe)
   final List<int> colorOrder; // groupes dans l'ordre de couture
-  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder, [this.linkLog = const []]);
+  final int refStitches; // points du dessin léger de référence (0 si pas de plafond)
+  final List<String> lightened; // allègements appliqués pour tenir le plafond
+  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder,
+      [this.linkLog = const [], this.refStitches = 0, this.lightened = const []]);
 }
 
 /// Point d'entrée utilisable dans un isolat (`compute`).
 DigitizeResult digitizeRequest(DigitizeRequest r) {
-  final d = _Digitizer(r.analysis, r.options);
-  final p = d.build(r.name);
-  return DigitizeResult(p, d._hiddenRuns, d.colorOrder, d.linkLog);
+  DigitizeResult run(DigitizeOptions o, [int ref = 0, List<String> l = const []]) {
+    final d = _Digitizer(r.analysis, o);
+    final p = d.build(r.name);
+    return DigitizeResult(p, d._hiddenRuns, d.colorOrder, d.linkLog, ref, l);
+  }
+
+  final o = r.options;
+  if (o.budget <= 0) return run(o);
+  // Dessin léger de référence : c'est lui qui fixe le nombre de points permis.
+  final light = o.copyWith(
+    densityMm: math.max(o.densityMm, 0.40),
+    pullCompMm: math.min(o.pullCompMm, 0.2),
+    underlayMm: 2.5,
+    contourRun: false,
+    budget: 0,
+  );
+  final ref = run(light).pattern.stitchCount;
+  final max = (ref * o.budget).round();
+  // Allègements successifs, du moins visible au plus visible.
+  final steps = <(String, DigitizeOptions Function(DigitizeOptions))>[
+    ('soutien espacé à 3,5 mm', (x) => x.copyWith(underlayMm: math.max(x.underlayMm, 3.5))),
+    ('contour retiré', (x) => x.copyWith(contourRun: false)),
+    ('densité 0,40 mm', (x) => x.copyWith(densityMm: math.max(x.densityMm, 0.40))),
+    ('soutien espacé à 5 mm', (x) => x.copyWith(underlayMm: math.max(x.underlayMm, 5))),
+    ('densité 0,45 mm', (x) => x.copyWith(densityMm: math.max(x.densityMm, 0.45))),
+  ];
+  var cur = o;
+  final done = <String>[];
+  var res = run(cur, ref, const []);
+  for (final (name, f) in steps) {
+    if (res.pattern.stitchCount <= max) break;
+    final next = f(cur);
+    if (next.underlayMm == cur.underlayMm &&
+        next.contourRun == cur.contourRun &&
+        next.densityMm == cur.densityMm) {
+      continue; // déjà au moins aussi léger
+    }
+    cur = next;
+    done.add(name);
+    res = run(cur, ref, List.of(done));
+  }
+  return res;
 }
 
 class _P {
@@ -877,7 +949,7 @@ class _Digitizer {
     _enter(s, entry);
 
     // Point droit sur le contour (sous le tatami) : bords nets, pas de vide aux pointes.
-    if (o.underlay) {
+    if (o.underlay && o.contourRun) {
       final loop = _contour(s);
       if (loop.length > 3) {
         var k0 = 0;
@@ -894,7 +966,7 @@ class _Digitizer {
 
     // 1. Soutien en point droit sur toute la forme (rangées espacées), depuis l'entrée.
     if (o.underlay) {
-      final every = math.max(2, (25 / spacing).round()); // ≈ 2,5 mm
+      final every = math.max(2, (o.underlayMm * 10 / spacing).round());
       for (final ci in uOrder) {
         final rs = rowsFrom(cells[ci], uFromTop[ci]!);
         var forward = true;

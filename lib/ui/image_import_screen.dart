@@ -384,7 +384,11 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                   ),
               ]),
               const SizedBox(height: 12),
-              Text('${p.stitchCount} points'),
+              Text('${p.stitchCount} points'
+                  '${r.refStitches > 0 ? '  (léger : ${r.refStitches}, +${((p.stitchCount / r.refStitches - 1) * 100).round()} %)' : ''}'),
+              if (r.lightened.isNotEmpty)
+                Text('Allégé pour rester sous +50 % : ${r.lightened.join(', ')}',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 12)),
               Text('${p.trimCount} coupes · ${p.colorChangeCount} changements de fil'),
               Text('${r.hiddenRuns} liaisons en point droit cachées (sans coupe)'),
               Text('${p.jumpCount} sauts'),

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:broderie/core/demo.dart';
@@ -348,5 +349,29 @@ void main() {
     // Coupes : aucune entre les roses ; seulement changement de fil, liaison des
     // deux bandes (qui passerait sur une rose déjà brodée) et fin.
     expect(r.pattern.trimCount, lessThanOrEqualTo(3));
+  });
+
+  test('plafond de points : au plus +50 % du dessin léger', () {
+    const w = 200, h = 200;
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final d = math.sqrt((x - 100) * (x - 100) + (y - 100) * (y - 100));
+        if (d < 80 && d > 20) {
+          final i = (y * w + x) * 4;
+          rgba[i] = rgba[i + 1] = rgba[i + 2] = 0;
+        }
+      }
+    }
+    final a = analyzeImage(DigitizeInput(rgba, w, h));
+    a.setWidthMm(120);
+    for (final s in a.shapes) {
+      s.mode = StitchMode.tatami;
+      s.overridden = true;
+    }
+    final r = digitizeRequest(DigitizeRequest(
+        a, const DigitizeOptions(groupColors: [0xFFC8102E], densityMm: 0.30), 'PLAFOND'));
+    expect(r.refStitches, greaterThan(0));
+    expect(r.pattern.stitchCount, lessThanOrEqualTo((r.refStitches * 1.5).round()));
   });
 }
