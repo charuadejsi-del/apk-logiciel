@@ -87,15 +87,22 @@ class _ExportSheetState extends State<ExportSheet> {
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Enregistrer le fichier DST',
         fileName: _fileName,
+        type: FileType.custom,
+        allowedExtensions: const ['dst'],
         bytes: _bytes,
       );
       if (path == null) return;
+      final hasExt = path.toLowerCase().endsWith('.dst');
       if (!_mobile) {
-        await File(path).writeAsBytes(_bytes, flush: true);
-        final size = await File(path).length();
+        // Sur ordinateur, on écrit nous-mêmes : on force l'extension .DST.
+        final target = hasExt ? path : '$path.DST';
+        await File(target).writeAsBytes(_bytes, flush: true);
+        final size = await File(target).length();
         _done(size == _bytes.length
-            ? 'Enregistré ✓ $path'
+            ? 'Enregistré ✓ $target'
             : 'Attention : fichier écrit incomplet ($size / ${_bytes.length} octets).');
+      } else if (!hasExt && !path.startsWith('content://')) {
+        _warnNoExtension(path);
       } else {
         _done('Enregistré ✓');
       }
@@ -104,6 +111,27 @@ class _ExportSheetState extends State<ExportSheet> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  void _warnNoExtension(String path) {
+    if (!mounted) return;
+    final name = path.split('/').last;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        icon: const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 36),
+        title: const Text('Extension .DST manquante'),
+        content: Text(
+          'Le fichier a été enregistré sous le nom « $name », sans « .DST » à la fin.\n\n'
+          'La machine et Wilcom ne le reconnaîtront pas. Renommez-le en « $name.DST », '
+          'ou utilisez le bouton « Envoyer », qui garde toujours le bon nom.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Compris')),
+        ],
+      ),
+    );
   }
 
   void _done(String msg) {
@@ -202,7 +230,13 @@ class _ExportSheetState extends State<ExportSheet> {
                 busy: _busy,
                 onPressed: ok ? _share : null,
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
+              const Text(
+                'Recommandé : garde toujours le nom avec « .DST ».',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: ok && !_busy ? _save : null,
                 icon: const Icon(Icons.folder_outlined),
@@ -215,6 +249,12 @@ class _ExportSheetState extends State<ExportSheet> {
                   side: const BorderSide(color: AppColors.border),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Si vous changez le nom, gardez « .DST » à la fin.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
             ] else
               GoldButton(
