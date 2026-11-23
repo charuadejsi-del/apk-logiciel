@@ -39,8 +39,8 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
   int _groups = 2;
   final List<int> _colors = [0xFFD4AF37, 0xFFC8102E, 0xFF1E7A46, 0xFF0B3D91, 0xFF7B2CBF, 0xFFF0F0F0];
   final List<StitchMode> _groupMode = List.filled(6, StitchMode.auto);
-  double _density = 0.40;
-  double _angle = 45;
+  double _density = 0.35;
+  double _angle = -1; // auto : suit chaque forme
   TrimMode _trim = TrimMode.auto;
   double _jumpMax = 5;
 
@@ -668,13 +668,14 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
           const Text('Angle des rangées', style: TextStyle(color: AppColors.muted, fontSize: 12)),
           const SizedBox(height: 6),
           Wrap(children: [
-            for (final x in const [0.0, 45.0, 90.0, 135.0])
-              _chip('${x.toStringAsFixed(0)}°', _angle == x, () => setState(() => _angle = x)),
+            for (final x in const [-1.0, 0.0, 45.0, 90.0, 135.0])
+              _chip(x < 0 ? 'Auto (suit la forme)' : '${x.toStringAsFixed(0)}°', _angle == x,
+                  () => setState(() => _angle = x)),
           ]),
           const Text('Densité', style: TextStyle(color: AppColors.muted, fontSize: 12)),
           const SizedBox(height: 6),
           Wrap(children: [
-            for (final x in const [0.35, 0.40, 0.45, 0.50])
+            for (final x in const [0.30, 0.35, 0.40, 0.45])
               _chip('${x.toStringAsFixed(2)} mm', _density == x, () => setState(() => _density = x)),
           ]),
         ]),

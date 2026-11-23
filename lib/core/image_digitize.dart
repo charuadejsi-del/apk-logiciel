@@ -395,10 +395,10 @@ class DigitizeOptions {
   final double jumpMaxMm;
   const DigitizeOptions({
     required this.groupColors,
-    this.densityMm = 0.40,
+    this.densityMm = 0.35,
     this.stitchMm = 3.5,
-    this.angleDeg = 45,
-    this.pullCompMm = 0.2,
+    this.angleDeg = -1, // < 0 : angle automatique selon chaque forme
+    this.pullCompMm = 0.3,
     this.underlay = true,
     this.trimMode = TrimMode.auto,
     this.jumpMaxMm = 5,
@@ -459,7 +459,7 @@ class _Digitizer {
   _P cur = const _P(0, 0);
   _P lastDir = const _P(1, 0);
   late final double px; // unités (0,1 mm) par pixel
-  late final double ca, sa; // rotation des rangées
+  double ca = 1, sa = 0; // rotation des rangées (réglée pour chaque forme)
   late final double ox, oy; // centrage du dessin
   static const double runLen = 20; // 2 mm
   static const double lockLen = 5;
@@ -556,7 +556,16 @@ class _Digitizer {
       }
     }
     final step = px * 0.5;
-    final minRun = 5.0; // 0,5 mm
+    const minRun = 2.0; // 0,2 mm : les pointes fines sont aussi remplies
+    // Chevauchement : si une autre forme touche (≤ 0,6 mm), on déborde de 0,3 mm dessous.
+    double grow(double u, double v, double dir) {
+      for (var t = step; t <= 6; t += step) {
+        final l = labelAt(fromUV(u + dir * t, v));
+        if (l != 0 && l != s.id) return 3;
+      }
+      return 0;
+    }
+
     final rows = <List<_Row>>[];
     var k = 0;
     for (var v = v0 + spacing / 2; v < v1; v += spacing, k++) {
@@ -569,7 +578,9 @@ class _Digitizer {
           start ??= u;
           lastIn = u;
         } else if (start != null) {
-          if (lastIn - start >= minRun) runs.add(_Row(k, start, lastIn));
+          if (lastIn - start >= minRun) {
+            runs.add(_Row(k, start - grow(start, v, -1), lastIn + grow(lastIn, v, 1)));
+          }
           start = null;
         }
       }
@@ -720,7 +731,78 @@ class _Digitizer {
     _stitch(_rowPoint(r, toU, v0, spacing));
   }
 
+  /// Contour extérieur de la forme (suivi de Moore), un point tous les ~1 mm.
+  List<_P> _contour(ShapeInfo s) {
+    bool isIn(int x, int y) =>
+        x >= 0 && y >= 0 && x < a.w && y < a.h && a.labels[y * a.w + x] == s.id;
+    var sx = -1, sy = -1;
+    for (var y = s.minY; y <= s.maxY && sx < 0; y++) {
+      for (var x = s.minX; x <= s.maxX; x++) {
+        if (isIn(x, y)) {
+          sx = x;
+          sy = y;
+          break;
+        }
+      }
+    }
+    if (sx < 0) return const [];
+    const dx = [1, 1, 0, -1, -1, -1, 0, 1], dy = [0, 1, 1, 1, 0, -1, -1, -1];
+    final pts = <_P>[];
+    var x = sx, y = sy, dir = 0;
+    int? firstDir;
+    final every = math.max(1, (1.0 / a.pxMm).round());
+    var count = 0;
+    for (var guard = 0; guard < 8 * s.pixels + 16; guard++) {
+      if (count++ % every == 0) pts.add(pixelCenter(x, y));
+      var moved = false;
+      for (var i = 0; i < 8; i++) {
+        final d = (dir + 6 + i) % 8;
+        if (isIn(x + dx[d], y + dy[d])) {
+          x += dx[d];
+          y += dy[d];
+          dir = d;
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) break; // pixel isolé
+      firstDir ??= dir;
+      if (x == sx && y == sy && dir == firstDir && pts.length > 2) break;
+    }
+    return pts;
+  }
+
   void _shape(ShapeInfo s, {_P? next}) {
+    // Angle des rangées : fixe, ou automatique dans le sens de la forme.
+    var ang = o.angleDeg * math.pi / 180;
+    if (o.angleDeg < 0) {
+      var n = 0;
+      var mx = 0.0, my = 0.0, cxx = 0.0, cyy = 0.0, cxy = 0.0;
+      for (var y = s.minY; y <= s.maxY; y++) {
+        for (var x = s.minX; x <= s.maxX; x++) {
+          if (a.labels[y * a.w + x] != s.id) continue;
+          n++;
+          mx += x;
+          my += y;
+          cxx += x * x.toDouble();
+          cyy += y * y.toDouble();
+          cxy += x * y.toDouble();
+        }
+      }
+      if (n > 2) {
+        mx /= n;
+        my /= n;
+        final vxx = cxx / n - mx * mx, vyy = cyy / n - my * my, vxy = cxy / n - mx * my;
+        ang = 0.5 * math.atan2(2 * vxy, vxx - vyy);
+        // Forme presque ronde : 45° classique.
+        final lam = math.sqrt((vxx - vyy) * (vxx - vyy) / 4 + vxy * vxy);
+        if (lam < 0.15 * (vxx + vyy) / 2) ang = math.pi / 4;
+      } else {
+        ang = math.pi / 4;
+      }
+    }
+    ca = math.cos(ang);
+    sa = math.sin(ang);
     final spacing = math.max(1.5, o.densityMm * 10);
     final comp = o.pullCompMm * 10;
     final len = o.stitchMm * 10;
@@ -792,6 +874,20 @@ class _Digitizer {
 
     final entry = endPoint(cells[eRoot], eTop);
     _enter(s, entry);
+
+    // Point droit sur le contour (sous le tatami) : bords nets, pas de vide aux pointes.
+    if (o.underlay) {
+      final loop = _contour(s);
+      if (loop.length > 3) {
+        var k0 = 0;
+        for (var i = 1; i < loop.length; i++) {
+          if (loop[i].dist(cur) < loop[k0].dist(cur)) k0 = i;
+        }
+        final ring = [...loop.sublist(k0), ...loop.sublist(0, k0), loop[k0]];
+        _travel(s, ring.first);
+        _runPoly(ring);
+      }
+    }
 
     List<_Row> rowsFrom(_Cell c, bool top) => top ? c.rows : c.rows.reversed.toList();
 
@@ -1243,8 +1339,19 @@ class _Digitizer {
           return t;
         }
 
-        final dl = ray(1), dr = ray(-1);
         final cD = toD(cx, cy);
+        // Chevauchement de 0,3 mm sous une forme voisine qui touche (≤ 0,6 mm).
+        double touch(double sgn, double t) {
+          for (var k = 0.4; k <= 0.6 / a.pxMm; k += 0.4) {
+            final q = toD(cx + nx * sgn * (t + k), cy + ny * sgn * (t + k));
+            final l = labelAt(q);
+            if (l != 0 && l != s.id) return 3 / px;
+          }
+          return 0;
+        }
+
+        final dl0 = ray(1), dr0 = ray(-1);
+        final dl = dl0 + touch(1, dl0), dr = dr0 + touch(-1, dr0);
         cen.add(cD);
         le.add(_P(cD.x + nx * (dl * px + comp), cD.y + ny * (dl * px + comp)));
         ri.add(_P(cD.x - nx * (dr * px + comp), cD.y - ny * (dr * px + comp)));
@@ -1434,7 +1541,10 @@ class _Digitizer {
       _stitch(p);
       if (t >= end) break;
       final speed = math.max(math.max(sl, sr) / (t2 - t).clamp(1e-6, 1.0), 1e-6);
-      t = math.min(end, t + spacing / speed);
+      // Pointe très fine (< 0,8 mm) : un point sur deux, pour éviter les nœuds.
+      final width = at(l, t).dist(at(r, t));
+      final factor = width < 8 ? 2.0 : 1.0;
+      t = math.min(end, t + factor * spacing / speed);
       k++;
       if (k > 500000) break;
     }
@@ -1652,7 +1762,7 @@ class _Digitizer {
       _stitchTo(to, runLen);
       return true;
     }
-    if (bareCells * cellMm > 2.0) return false; // trop visible : saut
+    if (bareCells > 0) return false; // jamais de point droit visible sur le tissu
     if (cells.length * cellMm > math.max(3 * straight * cellMm, straight * cellMm + 40)) {
       return false; // détour trop long
     }
@@ -1693,15 +1803,18 @@ class _Digitizer {
     final groups = chains.keys.toList()..sort();
     if (groups.length <= 1) return groups;
     // Pour chaque liaison d'une chaîne : étiquettes rencontrées en ligne droite.
-    final links = <int, List<List<int>>>{};
+    final links = <int, List<(double, List<int>)>>{};
     for (final g in groups) {
       final ch = chains[g]!;
-      final ls = <List<int>>[];
+      final ls = <(double, List<int>)>[];
       for (var i = 0; i + 1 < ch.length; i++) {
         final p = _nearestPixel(ch[i], pixelCenter(ch[i + 1].cx.round(), ch[i + 1].cy.round()));
         final q = _nearestPixel(ch[i + 1], p);
         final n = math.max(1, (p.dist(q) / 10).ceil()); // tous les 1 mm
-        ls.add([for (var k = 1; k < n; k++) labelAt(_P(p.x + (q.x - p.x) * k / n, p.y + (q.y - p.y) * k / n))]);
+        ls.add((
+          p.dist(q),
+          [for (var k = 1; k < n; k++) labelAt(_P(p.x + (q.x - p.x) * k / n, p.y + (q.y - p.y) * k / n))],
+        ));
       }
       links[g] = ls;
     }
@@ -1710,7 +1823,8 @@ class _Digitizer {
       final pos = {for (var i = 0; i < order.length; i++) order[i]: i};
       var total = 0.0;
       for (final g in order) {
-        for (final samples in links[g]!) {
+        for (final (gap, samples) in links[g]!) {
+          if (gap <= o.jumpMaxMm * 10) continue; // forme proche : saut court, aucun coût
           var bareMm = 0.0;
           for (final l in samples) {
             if (l == 0) {
@@ -1724,7 +1838,7 @@ class _Digitizer {
               }
             }
           }
-          total += bareMm <= 2.0 ? 0 : 30 + bareMm;
+          total += bareMm <= 0 ? 0 : 30 + bareMm;
         }
       }
       return total;
@@ -1794,9 +1908,10 @@ class _Digitizer {
       for (var i = 0; i < seq.length; i++) {
         final sh = seq[i];
         if (i > 0 && !_fresh) {
-          // Liaison avec la forme précédente : point droit caché si possible.
+          // Forme proche : simple saut court (pas de coupe).
+          // Forme éloignée : point droit entièrement caché sous une couleur à venir, sinon saut + coupe.
           final target = _nearestPixel(sh, cur);
-          _hiddenRun(target, seq[i - 1].id);
+          if (cur.dist(target) > o.jumpMaxMm * 10) _hiddenRun(target, seq[i - 1].id);
         }
         final next = i + 1 < seq.length
             ? _nearestPixel(seq[i + 1], pixelCenter(sh.cx.round(), sh.cy.round()))

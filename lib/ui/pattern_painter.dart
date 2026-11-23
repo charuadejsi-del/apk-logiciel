@@ -22,9 +22,11 @@ class PatternGeometry {
   final List<Color> colors;
   final Bounds bounds;
   final List<Stitch> stitches;
+  final Float32List jumpLines; // sauts : départ → arrivée
+  final Float32List trimPoints; // coupes
 
   PatternGeometry._(this.points, this.endIndex, this.shadePoints, this.shadeEnd,
-      this.colors, this.bounds, this.stitches);
+      this.colors, this.bounds, this.stitches, this.jumpLines, this.trimPoints);
 
   factory PatternGeometry.from(EmbPattern p) {
     final pts = <List<double>>[<double>[]];
@@ -35,6 +37,8 @@ class PatternGeometry {
     final sEnd = <List<List<int>>>[newShadeEnds()];
     var block = 0;
     Stitch? prev;
+    final jumps = <double>[];
+    final trims = <double>[];
     const light = 40 * math.pi / 180; // lumière venant du haut à gauche
     for (var i = 0; i < p.stitches.length; i++) {
       final s = p.stitches[i];
@@ -58,7 +62,11 @@ class PatternGeometry {
           sPts.add(newShadePts());
           sEnd.add(newShadeEnds());
         case StitchType.jump:
+          if (prev != null && (prev.x != s.x || prev.y != s.y)) {
+            jumps.addAll([prev.x.toDouble(), prev.y.toDouble(), s.x.toDouble(), s.y.toDouble()]);
+          }
         case StitchType.trim:
+          trims.addAll([s.x.toDouble(), s.y.toDouble()]);
         case StitchType.end:
           break;
       }
@@ -72,6 +80,8 @@ class PatternGeometry {
       [for (var b = 0; b < pts.length; b++) Color(p.colorOfBlock(b))],
       p.bounds,
       p.stitches,
+      Float32List.fromList(jumps),
+      Float32List.fromList(trims),
     );
   }
 
@@ -113,6 +123,7 @@ class PatternPainter extends CustomPainter {
   final bool showNeedle;
   final bool realistic;
   final bool showStartEnd;
+  final bool showJumps;
 
   PatternPainter(
     this.g, {
@@ -121,6 +132,7 @@ class PatternPainter extends CustomPainter {
     this.showNeedle = false,
     this.realistic = true,
     this.showStartEnd = false,
+    this.showJumps = false,
   }) : super(repaint: progress);
 
   @override
@@ -186,6 +198,21 @@ class PatternPainter extends CustomPainter {
       canvas.restore();
     }
 
+    if (showJumps) {
+      // Sauts en rouge, coupes marquées d'une croix.
+      final jp = Paint()
+        ..color = const Color(0xCCFF3B30)
+        ..strokeWidth = 1.6 / scale
+        ..style = PaintingStyle.stroke;
+      canvas.drawRawPoints(ui.PointMode.lines, g.jumpLines, jp);
+      final r = 5 / scale;
+      for (var i = 0; i + 1 < g.trimPoints.length; i += 2) {
+        final x = g.trimPoints[i], y = g.trimPoints[i + 1];
+        canvas.drawLine(Offset(x - r, y - r), Offset(x + r, y + r), jp);
+        canvas.drawLine(Offset(x - r, y + r), Offset(x + r, y - r), jp);
+      }
+    }
+
     if (showStartEnd) {
       final r = 7 / scale;
       canvas.drawCircle(
@@ -248,5 +275,6 @@ class PatternPainter extends CustomPainter {
       old.fixedProgress != fixedProgress ||
       old.showNeedle != showNeedle ||
       old.realistic != realistic ||
-      old.showStartEnd != showStartEnd;
+      old.showStartEnd != showStartEnd ||
+      old.showJumps != showJumps;
 }

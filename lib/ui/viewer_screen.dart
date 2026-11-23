@@ -46,6 +46,7 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
   int _playFrom = 0;
   int _speed = 300; // instructions par seconde
   bool _realistic = true;
+  bool _showJumps = false;
   bool _modified = false;
   static const int _machineSpm = 800;
 
@@ -839,7 +840,8 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
                             progress: _prog,
                             showNeedle: _playing,
                             realistic: _realistic,
-                            showStartEnd: !_playing),
+                            showStartEnd: !_playing,
+                            showJumps: _showJumps),
                       ),
                     ),
                   ),
@@ -858,6 +860,13 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
                   _tool(Icons.my_location, 'Départ', _startPoint),
                   _tool(Icons.cleaning_services_outlined, 'Petits points', _smallStitches),
                   _tool(Icons.palette_outlined, 'Couleurs', _showColors),
+                  _tool(_showJumps ? Icons.visibility_off_outlined : Icons.call_split,
+                      _showJumps ? 'Masquer sauts' : 'Voir sauts', () {
+                    setState(() => _showJumps = !_showJumps);
+                    if (_showJumps) {
+                      _snack('${_pattern.jumpCount} sauts (rouge) · ${_pattern.trimCount} coupes (croix)');
+                    }
+                  }),
                 ],
               ),
             ),
