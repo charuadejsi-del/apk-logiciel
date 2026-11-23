@@ -460,6 +460,401 @@ class _Column {
   }
 }
 
+// ───────────────────────── Graphe de la lettre ─────────────────────────
+//
+// Chaque lettre devient un réseau : nœuds (extrémités, jonctions en T, croisements)
+// et arêtes (morceaux de lignes). On peut ainsi circuler à l'intérieur de la lettre
+// en point droit, toujours sur une ligne qui sera couverte par le satin.
+
+double _polyLen(List<_V> p) {
+  var l = 0.0;
+  for (var i = 0; i + 1 < p.length; i++) {
+    l += p[i].dist(p[i + 1]);
+  }
+  return l;
+}
+
+class _GEdge {
+  final int a, b, piece;
+  final List<_V> pts; // de a vers b
+  final double len;
+  _GEdge(this.a, this.b, this.piece, this.pts) : len = _polyLen(pts);
+}
+
+class _LetterGraph {
+  final List<_V> nodes;
+  final List<_GEdge> edges;
+  final List<int> pieceStart, pieceEnd; // nœuds des extrémités (-1 si boucle)
+  final List<List<int>> pieceNodes; // nœuds situés sur chaque ligne
+  _LetterGraph(this.nodes, this.edges, this.pieceStart, this.pieceEnd, this.pieceNodes);
+
+  /// Plus court chemin de [from] à [to] en n'empruntant que les lignes de [mask].
+  /// Renvoie la longueur et la suite (arête, sens direct ?), ou null.
+  (double, List<(int, bool)>)? path(int from, int to, int mask) {
+    if (from == to) return (0.0, const <(int, bool)>[]);
+    final n = nodes.length;
+    final dist = List<double>.filled(n, double.infinity);
+    final prevEdge = List<int>.filled(n, -1);
+    final prevFwd = List<bool>.filled(n, true);
+    final done = List<bool>.filled(n, false);
+    dist[from] = 0;
+    for (var it = 0; it < n; it++) {
+      var u = -1;
+      for (var i = 0; i < n; i++) {
+        if (!done[i] && dist[i].isFinite && (u < 0 || dist[i] < dist[u])) u = i;
+      }
+      if (u < 0 || u == to) break;
+      done[u] = true;
+      for (var e = 0; e < edges.length; e++) {
+        final ed = edges[e];
+        if ((mask >> ed.piece) & 1 == 0) continue;
+        if (ed.a == u && dist[u] + ed.len < dist[ed.b]) {
+          dist[ed.b] = dist[u] + ed.len;
+          prevEdge[ed.b] = e;
+          prevFwd[ed.b] = true;
+        }
+        if (ed.b == u && dist[u] + ed.len < dist[ed.a]) {
+          dist[ed.a] = dist[u] + ed.len;
+          prevEdge[ed.a] = e;
+          prevFwd[ed.a] = false;
+        }
+      }
+    }
+    if (!dist[to].isFinite) return null;
+    final steps = <(int, bool)>[];
+    var v = to;
+    while (v != from) {
+      final e = prevEdge[v];
+      final fwd = prevFwd[v];
+      steps.add((e, fwd));
+      v = fwd ? edges[e].a : edges[e].b;
+    }
+    return (dist[to], steps.reversed.toList());
+  }
+
+  List<_V> polyline(int from, List<(int, bool)> steps) {
+    final out = <_V>[nodes[from]];
+    for (final (e, fwd) in steps) {
+      final p = fwd ? edges[e].pts : edges[e].pts.reversed.toList();
+      out.addAll(p.skip(1));
+    }
+    return out;
+  }
+}
+
+final Map<String, _LetterGraph> _graphCache = {};
+
+_LetterGraph _graphFor(String ch, List<GlyphStroke> strokes) =>
+    _graphCache.putIfAbsent(ch, () => _buildGraph(strokes));
+
+_LetterGraph _buildGraph(List<GlyphStroke> strokes) {
+  final polys = <List<_V>>[
+    for (final s in strokes)
+      [
+        for (final p in s.points) _V(p.$1, p.$2),
+        if (s.closed && s.points.isNotEmpty) _V(s.points.first.$1, s.points.first.$2),
+      ],
+  ];
+  final cums = <List<double>>[
+    for (final p in polys)
+      () {
+        final c = <double>[0];
+        for (var i = 0; i + 1 < p.length; i++) {
+          c.add(c.last + p[i].dist(p[i + 1]));
+        }
+        return c;
+      }(),
+  ];
+  final nodes = <_V>[];
+  int nodeAt(_V p) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].dist(p) < 1.0) return i;
+    }
+    nodes.add(p);
+    return nodes.length - 1;
+  }
+
+  _V pointAt(int i, double t) {
+    final p = polys[i], c = cums[i];
+    for (var k = 0; k + 1 < p.length; k++) {
+      if (t <= c[k + 1] || k + 2 == p.length) {
+        final seg = c[k + 1] - c[k];
+        final f = seg < 1e-9 ? 0.0 : ((t - c[k]) / seg).clamp(0.0, 1.0).toDouble();
+        return p[k] + (p[k + 1] - p[k]) * f;
+      }
+    }
+    return p.last;
+  }
+
+  List<_V> sub(int i, double t0, double t1) {
+    final p = polys[i], c = cums[i];
+    final out = <_V>[pointAt(i, t0)];
+    for (var k = 1; k + 1 < p.length; k++) {
+      if (c[k] > t0 + 1e-6 && c[k] < t1 - 1e-6) out.add(p[k]);
+    }
+    out.add(pointAt(i, t1));
+    return out;
+  }
+
+  final n = strokes.length;
+  final cuts = [for (var i = 0; i < n; i++) <(double, int)>[]];
+  final alias = <String, int>{};
+  bool isOpen(int i) => !strokes[i].closed && polys[i].length >= 2;
+
+  // Jonctions en T : extrémité d'une ligne posée sur le milieu d'une autre.
+  for (var i = 0; i < n; i++) {
+    if (polys[i].length < 2) continue;
+    for (var j = 0; j < n; j++) {
+      if (j == i || !isOpen(j)) continue;
+      for (final start in const [true, false]) {
+        final q = start ? polys[j].first : polys[j].last;
+        var best = double.infinity, bestT = 0.0;
+        _V bestP = q;
+        for (var k = 0; k + 1 < polys[i].length; k++) {
+          final a = polys[i][k], b = polys[i][k + 1];
+          final ab = b - a;
+          final l2 = ab.dot(ab);
+          final f = l2 < 1e-9 ? 0.0 : ((q - a).dot(ab) / l2).clamp(0.0, 1.0).toDouble();
+          final pr = a + ab * f;
+          final dd = pr.dist(q);
+          if (dd < best) {
+            best = dd;
+            bestT = cums[i][k] + (cums[i][k + 1] - cums[i][k]) * f;
+            bestP = pr;
+          }
+        }
+        if (best >= 3) continue;
+        final li = cums[i].last;
+        if (isOpen(i) && (bestT < 1.5 || bestT > li - 1.5)) continue; // extrémités partagées
+        final id = nodeAt(bestP);
+        cuts[i].add((bestT, id));
+        alias['$j:$start'] = id;
+      }
+    }
+  }
+
+  // Croisements (X, Q, 4, 8…).
+  for (var i = 0; i < n; i++) {
+    for (var j = i + 1; j < n; j++) {
+      for (var k = 0; k + 1 < polys[i].length; k++) {
+        for (var m = 0; m + 1 < polys[j].length; m++) {
+          final p = polys[i][k], r = polys[i][k + 1] - p;
+          final q = polys[j][m], s = polys[j][m + 1] - q;
+          final den = r.x * s.y - r.y * s.x;
+          if (den.abs() < 1e-9) continue;
+          final qp = q - p;
+          final u = (qp.x * s.y - qp.y * s.x) / den;
+          final v = (qp.x * r.y - qp.y * r.x) / den;
+          if (u <= 0 || u >= 1 || v <= 0 || v >= 1) continue;
+          final x = p + r * u;
+          bool nearEnd(int t) =>
+              isOpen(t) && (x.dist(polys[t].first) < 1.5 || x.dist(polys[t].last) < 1.5);
+          if (nearEnd(i) || nearEnd(j)) continue;
+          final id = nodeAt(x);
+          cuts[i].add((cums[i][k] + r.len * u, id));
+          cuts[j].add((cums[j][m] + s.len * v, id));
+        }
+      }
+    }
+  }
+
+  // Extrémités.
+  final pieceStart = List<int>.filled(n, -1), pieceEnd = List<int>.filled(n, -1);
+  for (var i = 0; i < n; i++) {
+    if (!isOpen(i)) continue;
+    final s = alias['$i:true'] ?? nodeAt(polys[i].first);
+    final e = alias['$i:false'] ?? nodeAt(polys[i].last);
+    cuts[i]
+      ..add((0.0, s))
+      ..add((cums[i].last, e));
+    pieceStart[i] = s;
+    pieceEnd[i] = e;
+  }
+
+  // Découpe en arêtes.
+  final edges = <_GEdge>[];
+  final pieceNodes = [for (var i = 0; i < n; i++) <int>[]];
+  for (var i = 0; i < n; i++) {
+    if (polys[i].length < 2) continue;
+    final l = cums[i].last;
+    final cs = [...cuts[i]]..sort((a, b) => a.$1.compareTo(b.$1));
+    final clean = <(double, int)>[];
+    for (final c in cs) {
+      if (clean.isNotEmpty && (c.$1 - clean.last.$1).abs() < 0.5) continue;
+      clean.add(c);
+    }
+    if (strokes[i].closed) {
+      if (clean.isEmpty) clean.add((0.0, nodeAt(polys[i].first)));
+      for (var k = 0; k < clean.length; k++) {
+        final (t0, a) = clean[k];
+        final last = k + 1 == clean.length;
+        final (t1raw, b) = last ? clean[0] : clean[k + 1];
+        final pts = last
+            ? [...sub(i, t0, l), ...sub(i, 0, t1raw).skip(1)]
+            : sub(i, t0, t1raw);
+        edges.add(_GEdge(a, b, i, pts));
+      }
+    } else {
+      for (var k = 0; k + 1 < clean.length; k++) {
+        edges.add(_GEdge(clean[k].$2, clean[k + 1].$2, i, sub(i, clean[k].$1, clean[k + 1].$1)));
+      }
+    }
+    for (final c in clean) {
+      if (!pieceNodes[i].contains(c.$2)) pieceNodes[i].add(c.$2);
+    }
+  }
+  return _LetterGraph(nodes, edges, pieceStart, pieceEnd, pieceNodes);
+}
+
+// ───────────────────────── Plan de broderie d'une lettre ─────────────────────────
+
+/// Une colonne satin dans le plan : ligne, sens, nœud d'entrée et de sortie.
+class _Piece {
+  final int stroke;
+  final bool reversed;
+  final int entry, exit;
+  const _Piece(this.stroke, this.reversed, this.entry, this.exit);
+}
+
+class _LetterPlan {
+  final int entry; // nœud de départ de la lettre
+  final List<(int, bool)> runWalk; // point droit sur toute la lettre (sous le satin)
+  final List<_Piece> pieces;
+  final List<List<(int, bool)>> links; // trajets entre colonnes (sous un satin à venir)
+  const _LetterPlan(this.entry, this.runWalk, this.pieces, this.links);
+}
+
+/// Point droit d'un seul passage qui couvre toute la lettre, de [from] à [to].
+(double, List<(int, bool)>) _coverWalk(_LetterGraph g, int from, int to, int allMask) {
+  final covered = List<bool>.filled(g.edges.length, false);
+  final steps = <(int, bool)>[];
+  var at = from;
+  var total = 0.0;
+  int remaining() => covered.where((c) => !c).length;
+  while (remaining() > 0) {
+    // Arête libre au nœud courant : on préfère celle qui mène vers d'autres arêtes libres.
+    var bestE = -1;
+    var bestFwd = true;
+    var bestScore = -double.infinity;
+    for (var e = 0; e < g.edges.length; e++) {
+      if (covered[e]) continue;
+      final ed = g.edges[e];
+      for (final fwd in const [true, false]) {
+        if ((fwd ? ed.a : ed.b) != at) continue;
+        final far = fwd ? ed.b : ed.a;
+        var free = 0;
+        for (var f = 0; f < g.edges.length; f++) {
+          if (f != e && !covered[f] && (g.edges[f].a == far || g.edges[f].b == far)) free++;
+        }
+        final score = free * 1000 - ed.len;
+        if (score > bestScore) {
+          bestScore = score;
+          bestE = e;
+          bestFwd = fwd;
+        }
+      }
+    }
+    if (bestE >= 0) {
+      covered[bestE] = true;
+      steps.add((bestE, bestFwd));
+      total += g.edges[bestE].len;
+      at = bestFwd ? g.edges[bestE].b : g.edges[bestE].a;
+      continue;
+    }
+    // Sinon : rejoindre la plus proche arête libre par le plus court chemin.
+    (double, List<(int, bool)>)? bestPath;
+    for (var e = 0; e < g.edges.length; e++) {
+      if (covered[e]) continue;
+      for (final target in [g.edges[e].a, g.edges[e].b]) {
+        final p = g.path(at, target, allMask);
+        if (p != null && (bestPath == null || p.$1 < bestPath.$1)) bestPath = p;
+      }
+    }
+    if (bestPath == null) break; // morceau isolé (ne devrait pas arriver)
+    for (final s in bestPath.$2) {
+      covered[s.$1] = true;
+      steps.add(s);
+      at = s.$2 ? g.edges[s.$1].b : g.edges[s.$1].a;
+    }
+    total += bestPath.$1;
+  }
+  final back = g.path(at, to, allMask);
+  if (back != null) {
+    steps.addAll(back.$2);
+    total += back.$1;
+  }
+  return (total, steps);
+}
+
+_LetterPlan _planLetter(_LetterGraph g, int entry, _V Function(int) pos, _V? next,
+    {required bool runFirst}) {
+  final n = g.pieceStart.length;
+  final pieces = [for (var i = 0; i < n; i++) if (g.pieceNodes[i].isNotEmpty) i];
+  var allMask = 0;
+  for (final i in pieces) {
+    allMask |= 1 << i;
+  }
+  final walkCache = <int, (double, List<(int, bool)>)>{};
+  (double, List<(int, bool)>) walkTo(int t) => walkCache.putIfAbsent(
+      t,
+      () => runFirst
+          ? _coverWalk(g, entry, t, allMask)
+          : (g.path(entry, t, allMask) ?? (0.0, const <(int, bool)>[])));
+
+  List<_Piece> options(int i) {
+    if (g.pieceStart[i] >= 0) {
+      return [
+        _Piece(i, false, g.pieceStart[i], g.pieceEnd[i]),
+        _Piece(i, true, g.pieceEnd[i], g.pieceStart[i]),
+      ];
+    }
+    return [for (final nd in g.pieceNodes[i]) _Piece(i, false, nd, nd)];
+  }
+
+  var bestCost = double.infinity;
+  List<_Piece> bestOrder = const [];
+  List<List<(int, bool)>> bestLinks = const [];
+
+  void search(List<_Piece> seq, List<List<(int, bool)>> links, int remainingMask, double cost) {
+    if (cost >= bestCost) return;
+    if (remainingMask == 0) {
+      var c = cost + walkTo(seq.first.entry).$1;
+      if (next != null) c += 0.8 * pos(seq.last.exit).dist(next);
+      if (c < bestCost) {
+        bestCost = c;
+        bestOrder = List.of(seq);
+        bestLinks = List.of(links);
+      }
+      return;
+    }
+    for (final i in pieces) {
+      if ((remainingMask >> i) & 1 == 0) continue;
+      for (final o in options(i)) {
+        var add = 0.0;
+        var link = const <(int, bool)>[];
+        if (seq.isNotEmpty) {
+          // Trajet caché : seulement sur des lignes pas encore brodées en satin.
+          final hidden = g.path(seq.last.exit, o.entry, remainingMask);
+          if (hidden != null) {
+            add = hidden.$1;
+            link = hidden.$2;
+          } else {
+            final any = g.path(seq.last.exit, o.entry, allMask);
+            if (any == null) continue;
+            add = any.$1 * 6 + 200; // visible sur le satin : fortement pénalisé
+            link = any.$2;
+          }
+        }
+        search([...seq, o], [...links, link], remainingMask & ~(1 << i), cost + add);
+      }
+    }
+  }
+
+  search([], [], allMask, 0);
+  final walk = bestOrder.isEmpty ? const <(int, bool)>[] : walkTo(bestOrder.first.entry).$2;
+  return _LetterPlan(entry, walk, bestOrder, bestLinks);
+}
+
 // ───────────────────────── Génération ─────────────────────────
 
 class _TextBuilder {
@@ -472,7 +867,6 @@ class _TextBuilder {
   late final double spacing; // écart satin, en 0,1 mm
   static const double runLen = 20; // 2 mm
   static const double lockLen = 5; // 0,5 mm
-  static const double connectMax = 20; // 2 mm
 
   _TextBuilder(this.d) {
     width = d.effectiveWidthMm * 10 + 2 * d.fabric.pullCompMm * 10;
@@ -480,13 +874,6 @@ class _TextBuilder {
   }
 
   bool get _edgeWalk => d.fabric.centerUnderlay && d.fabric.zigzagUnderlay && width >= 30;
-
-  /// Le satin finit-il au bout de la ligne (sinon il revient au début) ?
-  bool _exitsAtEnd(bool closed) {
-    if (closed) return false;
-    if (!d.fabric.centerUnderlay) return true;
-    return _edgeWalk;
-  }
 
   void _stitch(_V p) {
     final moved = p - cur;
@@ -508,7 +895,8 @@ class _TextBuilder {
     _stitch(p);
   }
 
-  void _moveTo(_V p, _V dir, {required bool sameLetter}) {
+  /// Passage d'une lettre à la suivante : saut, avec ou sans coupe.
+  void _jumpTo(_V p, _V dir) {
     if (out.isEmpty) {
       out.add(Stitch(p.x.round(), p.y.round(), StitchType.jump));
       cur = p;
@@ -516,16 +904,10 @@ class _TextBuilder {
       return;
     }
     final dist = p.dist(cur);
-    if (sameLetter && dist <= connectMax) {
-      _stitch(p);
-      return;
-    }
-    final limit = d.jumpMaxMm * 10;
     final cut = switch (d.trimMode) {
       TrimMode.none => false,
-      TrimMode.auto => dist > limit,
-      // Entre chaque lettre ; à l'intérieur d'une lettre, seulement si c'est loin.
-      TrimMode.all => sameLetter ? dist > limit : true,
+      TrimMode.auto => dist > d.jumpMaxMm * 10,
+      TrimMode.all => true,
     };
     _lockOff();
     if (cut) out.add(Stitch(cur.x.round(), cur.y.round(), StitchType.trim));
@@ -534,12 +916,32 @@ class _TextBuilder {
     _lockIn(p, dir);
   }
 
-  void _runCenter(_Column c, double d0, double d1) {
-    final len = (d1 - d0).abs();
-    final n = math.max(1, (len / runLen).ceil());
-    for (var k = 1; k <= n; k++) {
-      _stitch(c.s.at(d0 + (d1 - d0) * k / n).$1);
+  /// Point droit le long d'une ligne (points réguliers, angles respectés).
+  void _runAlong(List<_V> pts) {
+    if (pts.isEmpty) return;
+    if (pts.first.dist(cur) > 0.5) _stitch(pts.first);
+    var acc = 0.0;
+    for (var i = 1; i < pts.length; i++) {
+      final a = pts[i - 1], b = pts[i];
+      final segLen = a.dist(b);
+      if (segLen < 1e-6) continue;
+      var t = 0.0;
+      while (acc + (segLen - t) >= runLen) {
+        t += runLen - acc;
+        acc = 0;
+        _stitch(a + (b - a) * (t / segLen));
+      }
+      acc += segLen - t;
+      // Angle marqué : on pique dans le coin.
+      if (i + 1 < pts.length && acc > 1) {
+        final d1 = (b - a).unit, d2 = (pts[i + 1] - b).unit;
+        if (d1.dot(d2) < 0.85) {
+          _stitch(b);
+          acc = 0;
+        }
+      }
     }
+    if (pts.last.dist(cur) > 0.5) _stitch(pts.last);
   }
 
   void _runEdge(_Column c, double side, double d0, double d1) {
@@ -563,106 +965,23 @@ class _TextBuilder {
         };
     final d0 = (p[1] - p[0]);
     final d1 = (p[p.length - 2] - p[p.length - 1]);
-    final s0 = adjust(p.first, d0.unit, d0.len, st.startSpec);
-    final s1 = adjust(p.last, d1.unit, d1.len, st.endSpec);
-    p[0] = s0;
-    p[p.length - 1] = s1;
+    p[0] = adjust(p.first, d0.unit, d0.len, st.startSpec);
+    p[p.length - 1] = adjust(p.last, d1.unit, d1.len, st.endSpec);
     return _Stroke(p, false, st.startSpec, st.endSpec, st.capStartY, st.capEndY);
   }
 
-  void _emitStroke(_Stroke raw, {required bool sameLetter}) {
-    final c = _Column(_shape(raw), width);
+  /// Brode une colonne satin (soutien de bord éventuel, puis satin dans le sens prévu).
+  void _satinPiece(_Stroke st) {
+    final c = _Column(_shape(st), width);
     if (c.s.length < 1) return;
-    final (u0, u1) = c.underlayRange();
-    final fab = d.fabric;
-
-    if (!fab.centerUnderlay) {
-      final pts = c.satin(spacing, forward: true);
-      _moveTo(pts.first, c.s.dirAt(0), sameLetter: sameLetter);
-      for (final q in pts.skip(1)) {
-        _stitch(q);
-      }
-      return;
-    }
     if (_edgeWalk && !c.closed) {
-      // Soutien de bord : aller sur un bord, retour sur l'autre → bords nets.
-      _moveTo(c.edge(u0, 1, 0.7), c.s.dirAt(u0), sameLetter: sameLetter);
+      final (u0, u1) = c.underlayRange();
       _runEdge(c, 1, u0, u1);
       _runEdge(c, -1, u1, u0);
-      final pts = c.satin(spacing, forward: true);
-      _stitch(pts.first);
-      for (final q in pts.skip(1)) {
-        _stitch(q);
-      }
-      return;
     }
-    // Colonne étroite ou boucle : passage central puis satin.
-    _moveTo(c.s.at(u0).$1, c.s.dirAt(u0), sameLetter: sameLetter);
-    _runCenter(c, u0, u1);
-    final forward = c.closed; // boucle : on refait le tour ; sinon retour vers le début
-    final pts = c.satin(spacing, forward: forward);
-    for (final q in pts) {
+    for (final q in c.satin(spacing, forward: true)) {
       _stitch(q);
     }
-  }
-
-  /// Meilleur ordre et sens des lignes d'une lettre : trajets courts,
-  /// et fin au plus près de la lettre suivante.
-  List<_Stroke> _order(List<_Stroke> strokes, _V? from, _V? next) {
-    if (strokes.isEmpty) return strokes;
-    var best = <_Stroke>[];
-    var bestCost = double.infinity;
-
-    double cost(List<_Stroke> seq) {
-      var c = 0.0;
-      var at = from;
-      for (final s in seq) {
-        final entry = s.pts.first;
-        if (at != null) c += at.dist(entry);
-        at = s.closed ? entry : (_exitsAtEnd(false) ? s.pts.last : entry);
-      }
-      if (next != null && at != null) c += 0.8 * at.dist(next);
-      return c;
-    }
-
-    void search(List<_Stroke> done, List<_Stroke> rest) {
-      if (rest.isEmpty) {
-        final c = cost(done);
-        if (c < bestCost) {
-          bestCost = c;
-          best = List.of(done);
-        }
-        return;
-      }
-      for (var i = 0; i < rest.length; i++) {
-        final s = rest[i];
-        final remaining = [...rest]..removeAt(i);
-        final options = <_Stroke>[];
-        if (s.closed) {
-          final ref = done.isNotEmpty
-              ? (done.last.closed || !_exitsAtEnd(false) ? done.last.pts.first : done.last.pts.last)
-              : (from ?? s.pts.first);
-          var k = 0;
-          for (var j = 1; j < s.pts.length; j++) {
-            if (s.pts[j].dist(ref) < s.pts[k].dist(ref)) k = j;
-          }
-          options.add(s.rotatedTo(k));
-        } else {
-          options
-            ..add(s)
-            ..add(s.reversed());
-        }
-        for (final o in options) {
-          search([...done, o], remaining);
-        }
-      }
-    }
-
-    if (strokes.length <= 5) {
-      search([], strokes);
-      return best;
-    }
-    return strokes;
   }
 
   EmbPattern build() {
@@ -671,12 +990,12 @@ class _TextBuilder {
     final inkPad = width * 0.55; // la colonne déborde du squelette
 
     // Mise en page : l'écart visible entre deux lettres vaut exactement [gap].
-    final letters = <List<_Stroke>>[];
+    final glyphs = <(String, Glyph, double)>[]; // caractère, dessin, origine X
     final lettersLeft = <double>[];
     var cursor = 0.0;
-    var placed = false;
     for (final r in d.normalized.runes) {
-      final g = blockFont[String.fromCharCode(r)];
+      final ch = String.fromCharCode(r);
+      final g = blockFont[ch];
       if (g == null) continue;
       if (g.strokes.isEmpty) {
         cursor += g.width * scale;
@@ -690,44 +1009,78 @@ class _TextBuilder {
         }
       }
       final originX = cursor - (minX * scale - inkPad);
-      final specs = _endSpecs(g.strokes);
-      final strokes = <_Stroke>[
-        for (var k = 0; k < g.strokes.length; k++)
-          _Stroke(
-            [for (final p in g.strokes[k].points) _V(originX + p.$1 * scale, p.$2 * scale)],
-            g.strokes[k].closed,
-            specs[k].$1,
-            specs[k].$2,
-            specs[k].$1.capY * scale,
-            specs[k].$2.capY * scale,
-          ),
-      ];
-      letters.add(strokes);
+      glyphs.add((ch, g, originX));
       lettersLeft.add(cursor);
       cursor = originX + maxX * scale + inkPad + gap;
-      placed = true;
     }
-    if (!placed) {
+    if (glyphs.isEmpty) {
       return EmbPattern(
           name: _name(), stitches: const [Stitch(0, 0, StitchType.end)], colors: [d.color]);
     }
     final totalW = cursor - gap;
     final off = _V(-totalW / 2, -d.heightMm * 10 / 2);
 
-    for (var li = 0; li < letters.length; li++) {
-      final strokes = [
-        for (final s in letters[li])
-          _Stroke([for (final p in s.pts) p + off], s.closed, s.startSpec, s.endSpec,
-              s.capStartY + off.y, s.capEndY + off.y),
+    for (var li = 0; li < glyphs.length; li++) {
+      final (ch, glyph, originX) = glyphs[li];
+      _V toOut(_V p) => _V(originX + p.x * scale + off.x, p.y * scale + off.y);
+      final graph = _graphFor(ch, glyph.strokes);
+      final specs = _endSpecs(glyph.strokes);
+      final strokes = <_Stroke>[
+        for (var k = 0; k < glyph.strokes.length; k++)
+          _Stroke(
+            [for (final p in glyph.strokes[k].points) toOut(_V(p.$1, p.$2))],
+            glyph.strokes[k].closed,
+            specs[k].$1,
+            specs[k].$2,
+            specs[k].$1.capY * scale + off.y,
+            specs[k].$2.capY * scale + off.y,
+          ),
       ];
-      final next = li + 1 < letters.length
+
+      // Entrée de la lettre : le nœud le plus proche de la fin de la lettre précédente
+      // (ou du coin bas-gauche pour la première lettre).
+      final ref = out.isEmpty
+          ? toOut(const _V(-1000, 100))
+          : cur;
+      var entry = 0;
+      for (var i = 1; i < graph.nodes.length; i++) {
+        if (toOut(graph.nodes[i]).dist(ref) < toOut(graph.nodes[entry]).dist(ref)) entry = i;
+      }
+      final next = li + 1 < glyphs.length
           ? _V(lettersLeft[li + 1] + off.x, d.heightMm * 10 + off.y)
           : null;
-      final ordered = _order(strokes, out.isEmpty ? null : cur, next);
-      var first = true;
-      for (final s in ordered) {
-        _emitStroke(s, sameLetter: !first);
-        first = false;
+      final plan = _planLetter(graph, entry, (i) => toOut(graph.nodes[i]), next,
+          runFirst: d.fabric.centerUnderlay);
+
+      // 1. Arrivée sur la lettre.
+      final e0 = toOut(graph.nodes[plan.entry]);
+      final firstDir = plan.runWalk.isNotEmpty
+          ? (toOut(graph.polyline(plan.entry, plan.runWalk)[1]) - e0).unit
+          : const _V(1, 0);
+      _jumpTo(e0, firstDir);
+
+      // 2. Point droit d'un seul passage sur toute la lettre (caché sous le satin).
+      _runAlong([for (final p in graph.polyline(plan.entry, plan.runWalk)) toOut(p)]);
+
+      // 3. Colonnes satin dans l'ordre qui cache tous les trajets.
+      for (var k = 0; k < plan.pieces.length; k++) {
+        final pc = plan.pieces[k];
+        if (k > 0) {
+          final from = plan.pieces[k - 1].exit;
+          _runAlong([for (final p in graph.polyline(from, plan.links[k])) toOut(p)]);
+        }
+        var st = strokes[pc.stroke];
+        if (st.closed) {
+          final target = toOut(graph.nodes[pc.entry]);
+          var best = 0;
+          for (var j = 1; j < st.pts.length; j++) {
+            if (st.pts[j].dist(target) < st.pts[best].dist(target)) best = j;
+          }
+          st = st.rotatedTo(best);
+        } else if (pc.reversed) {
+          st = st.reversed();
+        }
+        _satinPiece(st);
       }
     }
     _lockOff();

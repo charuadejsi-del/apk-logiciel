@@ -109,6 +109,30 @@ void main() {
     expect(big.heightMm, closeTo(40, 4));
   });
 
+  test('chaque lettre se brode d\'un seul tenant : ni saut ni coupe à l\'intérieur', () {
+    for (final c in blockFont.keys.where((k) => k != ' ')) {
+      final p = TextDesign(text: c, heightMm: 20).generate();
+      expect(p.jumpCount, 1, reason: 'sauts dans $c');
+      expect(p.trimCount, 1, reason: 'coupes dans $c');
+      Stitch? prev;
+      var longest = 0.0;
+      for (final s in p.stitches) {
+        if (s.isStitch && prev != null && prev.isStitch) {
+          final l = distance(prev, s);
+          if (l > longest) longest = l;
+        }
+        prev = s;
+      }
+      expect(longest, lessThan(80), reason: 'point trop long dans $c');
+    }
+  });
+
+  test('mot sans coupe : un saut par lettre, une seule coupe finale', () {
+    final p = const TextDesign(text: 'FARES', trimMode: TrimMode.none).generate();
+    expect(p.jumpCount, 5);
+    expect(p.trimCount, 1);
+  });
+
   test('caractères non pris en charge signalés', () {
     expect(const TextDesign(text: 'A@b').unsupported, ['@']);
   });
