@@ -345,7 +345,8 @@ void main() {
         a, const DigitizeOptions(groupColors: [0xFFC8102E, 0xFF1E7A46]), 'ROSES'));
     expect(r.colorOrder.first, 0, reason: 'la couleur éparpillée passe d\'abord');
     expect(r.hiddenRuns, greaterThanOrEqualTo(2));
-    // Coupes : changement de fil + fin seulement.
-    expect(r.pattern.trimCount, lessThanOrEqualTo(2));
+    // Coupes : aucune entre les roses ; seulement changement de fil, liaison des
+    // deux bandes (qui passerait sur une rose déjà brodée) et fin.
+    expect(r.pattern.trimCount, lessThanOrEqualTo(3));
   });
 }
