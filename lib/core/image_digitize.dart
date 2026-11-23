@@ -414,17 +414,18 @@ class DigitizeRequest {
 
 /// Résultat avec le bilan de coût.
 class DigitizeResult {
+  final List<String> linkLog;
   final EmbPattern pattern;
   final int hiddenRuns; // liaisons en point droit cachées (sans saut ni coupe)
   final List<int> colorOrder; // groupes dans l'ordre de couture
-  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder);
+  const DigitizeResult(this.pattern, this.hiddenRuns, this.colorOrder, [this.linkLog = const []]);
 }
 
 /// Point d'entrée utilisable dans un isolat (`compute`).
 DigitizeResult digitizeRequest(DigitizeRequest r) {
   final d = _Digitizer(r.analysis, r.options);
   final p = d.build(r.name);
-  return DigitizeResult(p, d._hiddenRuns, d.colorOrder);
+  return DigitizeResult(p, d._hiddenRuns, d.colorOrder, d.linkLog);
 }
 
 class _P {
@@ -1694,6 +1695,7 @@ class _Digitizer {
   final Map<int, int> _rank = {};
   int _sewnUpTo = -1; // rang de la dernière forme brodée
   int _hiddenRuns = 0;
+  final linkLog = <String>[]; // diagnostic des liaisons entre motifs
 
   /// Trajet en point droit caché sous des formes pas encore brodées, de la position
   /// actuelle vers [to]. Renvoie false s'il faudrait trop marcher à découvert.
@@ -1703,7 +1705,10 @@ class _Digitizer {
     final tx = ((to.x - ox) / px / _gf).floor().clamp(0, _gw - 1).toInt();
     final ty = ((to.y - oy) / px / _gf).floor().clamp(0, _gh - 1).toInt();
     final straight = math.sqrt(((sx - tx) * (sx - tx) + (sy - ty) * (sy - ty)).toDouble());
-    if (straight > 150) return false; // > 15 cm : on saute
+    if (straight > 150) {
+      linkLog.add('trop loin');
+      return false; // > 15 cm : on saute
+    }
     final margin = 20;
     final x0 = math.max(0, math.min(sx, tx) - margin), x1 = math.min(_gw - 1, math.max(sx, tx) + margin);
     final y0 = math.max(0, math.min(sy, ty) - margin), y1 = math.min(_gh - 1, math.max(sy, ty) + margin);
@@ -1746,7 +1751,10 @@ class _Digitizer {
         }
       }
     }
-    if (dist[t].isInfinite) return false;
+    if (dist[t].isInfinite) {
+      linkLog.add('aucun chemin');
+      return false;
+    }
     // Chemin, et longueur parcourue à découvert.
     final cells = <int>[];
     var c = t;
@@ -1766,8 +1774,12 @@ class _Digitizer {
       _stitchTo(to, runLen);
       return true;
     }
-    if (bareCells > 0) return false; // jamais de point droit visible sur le tissu
+    if (bareCells > 0) {
+      linkLog.add('découvert $bareCells cases sur ${cells.length}');
+      return false; // jamais de point droit visible sur le tissu
+    }
     if (cells.length * cellMm > math.max(3 * straight * cellMm, straight * cellMm + 40)) {
+      linkLog.add('détour ${cells.length} cases pour ${straight.toStringAsFixed(0)}');
       return false; // détour trop long
     }
     final pts = <_P>[
@@ -1777,6 +1789,7 @@ class _Digitizer {
     pts[pts.length - 1] = to;
     _runPoly(pts);
     _hiddenRuns++;
+    linkLog.add('caché ${cells.length} cases');
     return true;
   }
 

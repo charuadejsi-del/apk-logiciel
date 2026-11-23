@@ -344,7 +344,7 @@ void main() {
     final r = digitizeRequest(DigitizeRequest(
         a, const DigitizeOptions(groupColors: [0xFFC8102E, 0xFF1E7A46]), 'ROSES'));
     expect(r.colorOrder.first, 0, reason: 'la couleur éparpillée passe d\'abord');
-    expect(r.hiddenRuns, greaterThanOrEqualTo(2));
+    expect(r.hiddenRuns, greaterThanOrEqualTo(2), reason: r.linkLog.join(' | '));
     // Coupes : aucune entre les roses ; seulement changement de fil, liaison des
     // deux bandes (qui passerait sur une rose déjà brodée) et fin.
     expect(r.pattern.trimCount, lessThanOrEqualTo(3));
