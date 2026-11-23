@@ -3,10 +3,12 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/demo.dart';
 import '../core/formats.dart';
+import '../core/pattern.dart';
 import 'image_import_screen.dart';
 import 'text_editor_screen.dart';
 import 'theme.dart';
@@ -39,7 +41,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       Uint8List? bytes = f.bytes;
       if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
       if (bytes == null) throw const FormatException('Impossible de lire le fichier.');
-      final p = loadPattern(bytes, f.name);
+      // Lecture dans un isolat : l'écran reste fluide même avec un gros fichier.
+      final p = await compute(_load, (bytes, f.name));
       final dot = f.name.lastIndexOf('.');
       final ext = dot >= 0 ? f.name.substring(dot + 1).toLowerCase() : '';
       if (!mounted) return;
@@ -247,3 +250,5 @@ class _BackdropPainter extends CustomPainter {
   @override
   bool shouldRepaint(_BackdropPainter oldDelegate) => false;
 }
+
+EmbPattern _load((Uint8List, String) a) => loadPattern(a.$1, a.$2);

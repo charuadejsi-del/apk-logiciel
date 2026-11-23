@@ -28,60 +28,109 @@ class PatternGeometry {
   PatternGeometry._(this.points, this.endIndex, this.shadePoints, this.shadeEnd,
       this.colors, this.bounds, this.stitches, this.jumpLines, this.trimPoints);
 
+  /// Construction en deux passes sur des tableaux typés (aucune liste de
+  /// doubles intermédiaire) : rapide même avec plusieurs centaines de milliers de points.
   factory PatternGeometry.from(EmbPattern p) {
-    final pts = <List<double>>[<double>[]];
-    final ends = <List<int>>[<int>[]];
-    List<List<double>> newShadePts() => [for (var i = 0; i < _shades; i++) <double>[]];
-    List<List<int>> newShadeEnds() => [for (var i = 0; i < _shades; i++) <int>[]];
-    final sPts = <List<List<double>>>[newShadePts()];
-    final sEnd = <List<List<int>>>[newShadeEnds()];
-    var block = 0;
-    Stitch? prev;
-    final jumps = <double>[];
-    final trims = <double>[];
+    final st = p.stitches;
     const light = 40 * math.pi / 180; // lumière venant du haut à gauche
-    for (var i = 0; i < p.stitches.length; i++) {
-      final s = p.stitches[i];
+    final cl = math.cos(light), sl = math.sin(light);
+    int shadeOf(Stitch a, Stitch b) {
+      final dx = (b.x - a.x).toDouble(), dy = (b.y - a.y).toDouble();
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d == 0) return _shades - 1;
+      final c = ((dx * cl + dy * sl) / d).abs(); // |cos(angle - lumière)|
+      return math.min(_shades - 1, (c * _shades).floor());
+    }
+
+    // 1. Comptage.
+    final segCount = <int>[0];
+    final shadeCount = <List<int>>[List<int>.filled(_shades, 0)];
+    var nJumps = 0, nTrims = 0;
+    var block = 0;
+    for (var i = 1; i <= st.length; i++) {
+      final s = st[i - 1];
+      if (s.type == StitchType.colorChange) {
+        block++;
+        segCount.add(0);
+        shadeCount.add(List<int>.filled(_shades, 0));
+      } else if (s.type == StitchType.trim) {
+        nTrims++;
+      }
+      if (i == st.length) break;
+      final n = st[i];
+      if (n.type == StitchType.stitch && s.isStitch) {
+        segCount[block]++;
+        shadeCount[block][shadeOf(s, n)]++;
+      } else if (n.type == StitchType.jump && (s.x != n.x || s.y != n.y)) {
+        nJumps++;
+      }
+    }
+    // 2. Remplissage.
+    final pts = [for (final c in segCount) Float32List(c * 4)];
+    final ends = [for (final c in segCount) Int32List(c)];
+    final sPts = [
+      for (final b in shadeCount) [for (final c in b) Float32List(c * 4)]
+    ];
+    final sEnd = [
+      for (final b in shadeCount) [for (final c in b) Int32List(c)]
+    ];
+    final fill = List<int>.filled(segCount.length, 0);
+    final sFill = [for (final _ in segCount) List<int>.filled(_shades, 0)];
+    final jumps = Float32List(nJumps * 4);
+    final trims = Float32List(nTrims * 2);
+    var ji = 0, ti = 0;
+    block = 0;
+    Stitch? prev;
+    for (var i = 0; i < st.length; i++) {
+      final s = st[i];
       switch (s.type) {
         case StitchType.stitch:
           if (prev != null && prev.isStitch) {
             final x0 = prev.x.toDouble(), y0 = prev.y.toDouble();
             final x1 = s.x.toDouble(), y1 = s.y.toDouble();
-            pts[block].addAll([x0, y0, x1, y1]);
-            ends[block].add(i);
-            final a = math.atan2(y1 - y0, x1 - x0);
-            final b = math.cos(a - light).abs();
-            final shade = math.min(_shades - 1, (b * _shades).floor());
-            sPts[block][shade].addAll([x0, y0, x1, y1]);
-            sEnd[block][shade].add(i);
+            final k = fill[block]++;
+            final pb = pts[block];
+            pb[k * 4] = x0;
+            pb[k * 4 + 1] = y0;
+            pb[k * 4 + 2] = x1;
+            pb[k * 4 + 3] = y1;
+            ends[block][k] = i;
+            final sh = shadeOf(prev, s);
+            final m = sFill[block][sh]++;
+            final sp = sPts[block][sh];
+            sp[m * 4] = x0;
+            sp[m * 4 + 1] = y0;
+            sp[m * 4 + 2] = x1;
+            sp[m * 4 + 3] = y1;
+            sEnd[block][sh][m] = i;
           }
         case StitchType.colorChange:
           block++;
-          pts.add(<double>[]);
-          ends.add(<int>[]);
-          sPts.add(newShadePts());
-          sEnd.add(newShadeEnds());
         case StitchType.jump:
           if (prev != null && (prev.x != s.x || prev.y != s.y)) {
-            jumps.addAll([prev.x.toDouble(), prev.y.toDouble(), s.x.toDouble(), s.y.toDouble()]);
+            jumps[ji++] = prev.x.toDouble();
+            jumps[ji++] = prev.y.toDouble();
+            jumps[ji++] = s.x.toDouble();
+            jumps[ji++] = s.y.toDouble();
           }
         case StitchType.trim:
-          trims.addAll([s.x.toDouble(), s.y.toDouble()]);
+          trims[ti++] = s.x.toDouble();
+          trims[ti++] = s.y.toDouble();
         case StitchType.end:
           break;
       }
       prev = s;
     }
     return PatternGeometry._(
-      [for (final l in pts) Float32List.fromList(l)],
-      [for (final l in ends) Int32List.fromList(l)],
-      [for (final b in sPts) [for (final l in b) Float32List.fromList(l)]],
-      [for (final b in sEnd) [for (final l in b) Int32List.fromList(l)]],
+      pts,
+      ends,
+      sPts,
+      sEnd,
       [for (var b = 0; b < pts.length; b++) Color(p.colorOfBlock(b))],
       p.bounds,
-      p.stitches,
-      Float32List.fromList(jumps),
-      Float32List.fromList(trims),
+      st,
+      jumps,
+      trims,
     );
   }
 

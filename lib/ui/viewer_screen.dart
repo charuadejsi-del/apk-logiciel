@@ -8,7 +8,8 @@ import '../core/pattern.dart';
 import '../core/text_engine.dart';
 import '../core/transform.dart';
 import 'export_sheet.dart';
-import 'machine_screen.dart';
+import 'cut_screen.dart';
+import 'frame_screen.dart';
 import 'pattern_painter.dart';
 import 'theme.dart';
 
@@ -638,6 +639,11 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
     );
   }
 
+  void _open(Widget screen) {
+    if (_playing) _togglePlay();
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
   void _export() {
     final canReuse =
         !_modified && widget.sourceFormat == 'dst' && widget.sourceBytes != null;
@@ -856,11 +862,8 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 children: [
-                  _tool(Icons.crop_free, 'Machine', () {
-                    if (_playing) _togglePlay();
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => MachineScreen(pattern: _base)));
-                  }),
+                  _tool(Icons.content_cut, 'Découpe', () => _open(CutScreen(pattern: _base))),
+                  _tool(Icons.crop_free, 'Cadre', () => _open(FrameScreen(pattern: _base))),
                   _tool(Icons.open_in_full, 'Taille', _resize),
                   _tool(Icons.density_medium, 'Densité', _density),
                   _tool(Icons.my_location, 'Départ', _startPoint),

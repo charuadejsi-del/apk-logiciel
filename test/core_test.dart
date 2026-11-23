@@ -430,4 +430,40 @@ void main() {
       expect(pc.cutObjects, greaterThan(0));
     }
   });
+
+  test('découpe à la main : ligne tordue dans le vide, puis ligne qui traverse un bloc', () {
+    List<Stitch> block(int x0, int w) {
+      final st = <Stitch>[Stitch(x0, 0, StitchType.jump)];
+      for (var y = 0; y <= 1000; y += 4) {
+        final fwd = (y ~/ 4).isEven;
+        for (var k = 0; k <= w ~/ 35; k++) {
+          st.add(Stitch(fwd ? x0 + k * 35 : x0 + w - k * 35, y, StitchType.stitch));
+        }
+      }
+      st.add(Stitch(st.last.x, st.last.y, StitchType.trim));
+      return st;
+    }
+
+    final p = EmbPattern(name: 'ZIGZAG', stitches: [...block(0, 700), ...block(1000, 700)]);
+    const o = PrepOptions(hoopWmm: 180, hoopHmm: 280);
+    // Ligne en zigzag qui reste dans le vide (x entre 72 et 98 mm).
+    final r = cutByLines(p, [
+      [(850.0, -100.0), (760.0, 300.0), (950.0, 600.0), (800.0, 1100.0)]
+    ], o);
+    expect(r.error, isNull);
+    expect(r.pieces.length, 2);
+    expect(r.pieces.every((x) => x.cutObjects == 0), isTrue);
+    // Ligne qui coupe le premier bloc en deux (x = 35 mm, en biais).
+    final r2 = cutByLines(p, [
+      [(300.0, -100.0), (400.0, 1100.0)]
+    ], o);
+    expect(r2.pieces.length, 2);
+    expect(r2.pieces.first.cutObjects, greaterThan(0));
+    // Aucun point perdu : chaque morceau relu en DST sans perte.
+    for (final pc in [...r.pieces, ...r2.pieces]) {
+      expect(readDst(writeDst(pc.pattern)).stitchCount, pc.pattern.stitchCount);
+    }
+    // Sans ligne : un seul morceau.
+    expect(cutByLines(p, const [], o).pieces.length, 1);
+  });
 }
