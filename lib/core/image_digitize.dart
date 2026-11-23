@@ -23,6 +23,12 @@ class DigitizeInput {
   const DigitizeInput(this.rgba, this.width, this.height, {this.groups = 2});
 }
 
+/// Type de point choisi pour une forme.
+enum StitchMode { auto, satin, tatami }
+
+/// Largeur maximale (mm) d'une forme brodée en satin en mode automatique.
+const double autoSatinMaxMm = 8;
+
 class ShapeInfo {
   final int id; // étiquette dans [ImageAnalysis.labels]
   final int pixels;
@@ -30,8 +36,22 @@ class ShapeInfo {
   final double compactness; // 1 = disque, proche de 0 = forme fine
   int group = 0;
   bool excluded = false; // retirée par l'utilisateur
+  StitchMode mode = StitchMode.auto;
+
+  /// Demi-épaisseur maximale de la forme, en pixels.
+  double maxRadiusPx = 0;
   ShapeInfo(this.id, this.pixels, this.minX, this.minY, this.maxX, this.maxY,
       this.compactness);
+
+  /// Épaisseur maximale en mm pour une taille de pixel donnée.
+  double widthMm(double pxMm) => 2 * maxRadiusPx * pxMm;
+
+  /// Satin ou tatami, une fois le mode automatique résolu.
+  bool isSatin(double pxMm) => switch (mode) {
+        StitchMode.satin => true,
+        StitchMode.tatami => false,
+        StitchMode.auto => widthMm(pxMm) <= autoSatinMaxMm,
+      };
   double get cx => (minX + maxX) / 2;
   double get cy => (minY + maxY) / 2;
 }
@@ -234,8 +254,59 @@ ImageAnalysis analyzeImage(DigitizeInput input) {
   for (var i = 0; i < w * h; i++) {
     lab[i] = remap[lab[i]];
   }
+  // Épaisseur de chaque forme (distance au bord).
+  final dt = chamferDistance(lab, w, h);
+  for (var i = 0; i < w * h; i++) {
+    final l = lab[i];
+    if (l == 0) continue;
+    final r = dt[i];
+    if (r > shapes[l - 1].maxRadiusPx) shapes[l - 1].maxRadiusPx = r;
+  }
   groupShapes(shapes, input.groups);
   return ImageAnalysis(w, h, lab, shapes, w - 4, h - 4);
+}
+
+/// Distance (en pixels) de chaque pixel de forme au fond le plus proche (chanfrein 3-4).
+Float32List chamferDistance(Int32List lab, int w, int h) {
+  final d = Int32List(w * h);
+  const big = 1 << 28;
+  for (var i = 0; i < w * h; i++) {
+    d[i] = lab[i] == 0 ? 0 : big;
+  }
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final i = y * w + x;
+      if (d[i] == 0) continue;
+      var v = d[i];
+      if (x > 0) v = math.min(v, d[i - 1] + 3);
+      if (y > 0) {
+        v = math.min(v, d[i - w] + 3);
+        if (x > 0) v = math.min(v, d[i - w - 1] + 4);
+        if (x < w - 1) v = math.min(v, d[i - w + 1] + 4);
+      }
+      if (x == 0 || y == 0 || x == w - 1 || y == h - 1) v = math.min(v, 3);
+      d[i] = v;
+    }
+  }
+  for (var y = h - 1; y >= 0; y--) {
+    for (var x = w - 1; x >= 0; x--) {
+      final i = y * w + x;
+      if (d[i] == 0) continue;
+      var v = d[i];
+      if (x < w - 1) v = math.min(v, d[i + 1] + 3);
+      if (y < h - 1) {
+        v = math.min(v, d[i + w] + 3);
+        if (x < w - 1) v = math.min(v, d[i + w + 1] + 4);
+        if (x > 0) v = math.min(v, d[i + w - 1] + 4);
+      }
+      d[i] = v;
+    }
+  }
+  final out = Float32List(w * h);
+  for (var i = 0; i < w * h; i++) {
+    out[i] = d[i] / 3.0;
+  }
+  return out;
 }
 
 /// Regroupe les formes qui se ressemblent (taille et finesse) : un groupe = une couleur.
@@ -726,6 +797,564 @@ class _Digitizer {
     }
   }
 
+  // ───────────────────────── Satin ─────────────────────────
+
+  /// Point droit le long d'une ligne (points de 2 mm, coins respectés).
+  void _runPoly(List<_P> pts) {
+    if (pts.isEmpty) return;
+    if (pts.first.dist(cur) > 0.5) _stitchTo(pts.first, runLen);
+    var acc = 0.0;
+    for (var i = 1; i < pts.length; i++) {
+      final p0 = pts[i - 1], p1 = pts[i];
+      final seg = p0.dist(p1);
+      if (seg < 1e-6) continue;
+      var t = 0.0;
+      while (acc + (seg - t) >= runLen) {
+        t += runLen - acc;
+        acc = 0;
+        _stitch(_P(p0.x + (p1.x - p0.x) * t / seg, p0.y + (p1.y - p0.y) * t / seg));
+      }
+      acc += seg - t;
+    }
+    if (pts.last.dist(cur) > 0.5) _stitch(pts.last);
+  }
+
+  /// Amincissement de Zhang-Suen : squelette d'un pixel d'épaisseur.
+  static Uint8List _thin(Uint8List src, int w, int h) {
+    final m = Uint8List.fromList(src);
+    final del = <int>[];
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (var pass = 0; pass < 2; pass++) {
+        del.clear();
+        for (var y = 1; y < h - 1; y++) {
+          for (var x = 1; x < w - 1; x++) {
+            final i = y * w + x;
+            if (m[i] == 0) continue;
+            final p2 = m[i - w], p3 = m[i - w + 1], p4 = m[i + 1], p5 = m[i + w + 1];
+            final p6 = m[i + w], p7 = m[i + w - 1], p8 = m[i - 1], p9 = m[i - w - 1];
+            final b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (b < 2 || b > 6) continue;
+            var t = 0;
+            if (p2 == 0 && p3 == 1) t++;
+            if (p3 == 0 && p4 == 1) t++;
+            if (p4 == 0 && p5 == 1) t++;
+            if (p5 == 0 && p6 == 1) t++;
+            if (p6 == 0 && p7 == 1) t++;
+            if (p7 == 0 && p8 == 1) t++;
+            if (p8 == 0 && p9 == 1) t++;
+            if (p9 == 0 && p2 == 1) t++;
+            if (t != 1) continue;
+            if (pass == 0) {
+              if (p2 * p4 * p6 != 0 || p4 * p6 * p8 != 0) continue;
+            } else {
+              if (p2 * p4 * p8 != 0 || p2 * p6 * p8 != 0) continue;
+            }
+            del.add(i);
+          }
+        }
+        for (final i in del) {
+          m[i] = 0;
+        }
+        if (del.isNotEmpty) changed = true;
+      }
+    }
+    return m;
+  }
+
+  /// Satin d'une forme : squelette → colonnes à largeur variable, soutien en point
+  /// droit d'abord, puis satin qui revient en couvrant tout. Renvoie false si la
+  /// forme ne se prête pas au satin (elle sera alors en tatami).
+  bool _satinShape(ShapeInfo s) {
+    final x0 = math.max(0, s.minX - 1), y0 = math.max(0, s.minY - 1);
+    final x1 = math.min(a.w - 1, s.maxX + 1), y1 = math.min(a.h - 1, s.maxY + 1);
+    final bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    final m = Uint8List(bw * bh);
+    final labc = Int32List(bw * bh);
+    var cnt = 0;
+    var sx = 0.0, sy = 0.0;
+    for (var y = 0; y < bh; y++) {
+      for (var x = 0; x < bw; x++) {
+        if (a.labels[(y + y0) * a.w + x + x0] == s.id) {
+          m[y * bw + x] = 1;
+          labc[y * bw + x] = 1;
+          cnt++;
+          sx += x;
+          sy += y;
+        }
+      }
+    }
+    if (cnt == 0) return false;
+    final dt = chamferDistance(labc, bw, bh);
+    _P toD(double x, double y) => _P(ox + (x0 + x + 0.5) * px, oy + (y0 + y + 0.5) * px);
+    double dtAt(double x, double y) {
+      final ix = x.round().clamp(0, bw - 1).toInt(), iy = y.round().clamp(0, bh - 1).toInt();
+      return dt[iy * bw + ix];
+    }
+
+    bool inside(double x, double y) {
+      final ix = x.floor(), iy = y.floor();
+      if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) return false;
+      return m[iy * bw + ix] == 1;
+    }
+
+    // ── Squelette et graphe (en pixels du recadrage).
+    final sk = _thin(m, bw, bh);
+    int nbCount(int i) {
+      final x = i % bw, y = i ~/ bw;
+      var c = 0;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          final nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+          if (sk[ny * bw + nx] == 1) c++;
+        }
+      }
+      return c;
+    }
+
+    List<int> nbs(int i) {
+      final x = i % bw, y = i ~/ bw;
+      return [
+        for (var dy = -1; dy <= 1; dy++)
+          for (var dx = -1; dx <= 1; dx++)
+            if (!(dx == 0 && dy == 0) &&
+                x + dx >= 0 &&
+                y + dy >= 0 &&
+                x + dx < bw &&
+                y + dy < bh &&
+                sk[(y + dy) * bw + x + dx] == 1)
+              (y + dy) * bw + x + dx,
+      ];
+    }
+
+    final nodeOf = Int32List(bw * bh)..fillRange(0, bw * bh, -1);
+    final nodePix = <List<int>>[];
+    final skPix = <int>[for (var i = 0; i < bw * bh; i++) if (sk[i] == 1) i];
+    for (final i in skPix) {
+      if (nbCount(i) == 2 || nodeOf[i] >= 0) continue;
+      final id = nodePix.length;
+      final cluster = <int>[i];
+      nodeOf[i] = id;
+      for (var k = 0; k < cluster.length; k++) {
+        for (final n in nbs(cluster[k])) {
+          if (nodeOf[n] < 0 && nbCount(n) != 2) {
+            nodeOf[n] = id;
+            cluster.add(n);
+          }
+        }
+      }
+      nodePix.add(cluster);
+    }
+    final edges = <(int, int, List<int>)>[]; // nœud a, nœud b, pixels
+    final visited = Uint8List(bw * bh);
+    void trace(int startNode, int startPix, int first) {
+      final path = <int>[startPix, first];
+      visited[first] = 1;
+      var prev = startPix, at = first;
+      while (true) {
+        if (nodeOf[at] >= 0) {
+          edges.add((startNode, nodeOf[at], path));
+          return;
+        }
+        int? next;
+        for (final n in nbs(at)) {
+          if (n == prev) continue;
+          if (nodeOf[n] >= 0 && !(nodeOf[n] == startNode && path.length < 4)) {
+            next = n;
+            break;
+          }
+        }
+        if (next == null) {
+          for (final n in nbs(at)) {
+            if (n != prev && nodeOf[n] < 0 && visited[n] == 0) {
+              next = n;
+              break;
+            }
+          }
+        }
+        if (next == null) {
+          // Fin inattendue : on crée un nœud ici.
+          final id = nodePix.length;
+          nodePix.add([at]);
+          nodeOf[at] = id;
+          edges.add((startNode, id, path));
+          return;
+        }
+        if (nodeOf[next] < 0) visited[next] = 1;
+        path.add(next);
+        prev = at;
+        at = next;
+      }
+    }
+
+    for (var id = 0; id < nodePix.length; id++) {
+      for (final p in List.of(nodePix[id])) {
+        for (final q in nbs(p)) {
+          if (nodeOf[q] >= 0 || visited[q] == 1) continue;
+          trace(id, p, q);
+        }
+      }
+    }
+    // Boucles sans nœud (anneau) : on en crée un.
+    for (final i in skPix) {
+      if (nodeOf[i] >= 0 || visited[i] == 1) continue;
+      final id = nodePix.length;
+      nodePix.add([i]);
+      nodeOf[i] = id;
+      for (final q in nbs(i)) {
+        if (nodeOf[q] < 0 && visited[q] == 0) {
+          trace(id, i, q);
+          break;
+        }
+      }
+    }
+    final nodePos = <(double, double)>[
+      for (final c in nodePix)
+        (
+          c.map((i) => (i % bw).toDouble()).reduce((p, q) => p + q) / c.length,
+          c.map((i) => (i ~/ bw).toDouble()).reduce((p, q) => p + q) / c.length,
+        ),
+    ];
+
+    // ── Élagage des petites branches parasites, puis fusion des nœuds de degré 2.
+    var es = [for (final e in edges) (e.$1, e.$2, [for (final i in e.$3) ((i % bw).toDouble(), (i ~/ bw).toDouble())])];
+    int degree(int n) {
+      var d = 0;
+      for (final e in es) {
+        if (e.$1 == n) d++;
+        if (e.$2 == n) d++;
+      }
+      return d;
+    }
+
+    for (var pass = 0; pass < 3 && es.length > 1; pass++) {
+      final keep = <(int, int, List<(double, double)>)>[];
+      for (final e in es) {
+        final da = degree(e.$1), db = degree(e.$2);
+        final len = e.$3.length.toDouble();
+        final spurA = da == 1 && db >= 3 && len < 1.6 * dtAt(nodePos[e.$2].$1, nodePos[e.$2].$2) + 3;
+        final spurB = db == 1 && da >= 3 && len < 1.6 * dtAt(nodePos[e.$1].$1, nodePos[e.$1].$2) + 3;
+        if (spurA || spurB) continue;
+        keep.add(e);
+      }
+      if (keep.isEmpty) break;
+      es = keep;
+    }
+    var merged = true;
+    while (merged) {
+      merged = false;
+      for (var n = 0; n < nodePos.length && !merged; n++) {
+        final inc = [for (var k = 0; k < es.length; k++) if (es[k].$1 == n || es[k].$2 == n) k];
+        if (inc.length != 2 || es[inc[0]].$1 == es[inc[0]].$2) continue;
+        final e1 = es[inc[0]], e2 = es[inc[1]];
+        // Oriente e1 pour finir en n, e2 pour partir de n.
+        final p1 = e1.$2 == n ? e1.$3 : e1.$3.reversed.toList();
+        final a1 = e1.$2 == n ? e1.$1 : e1.$2;
+        final p2 = e2.$1 == n ? e2.$3 : e2.$3.reversed.toList();
+        final b2 = e2.$1 == n ? e2.$2 : e2.$1;
+        final joined = (a1, b2, [...p1, ...p2.skip(1)]);
+        es = [
+          for (var k = 0; k < es.length; k++)
+            if (k != inc[0] && k != inc[1]) es[k],
+          joined,
+        ];
+        merged = true;
+      }
+    }
+
+    // Petite forme ronde : axe principal à la place du squelette.
+    var totalLen = 0;
+    for (final e in es) {
+      totalLen += e.$3.length;
+    }
+    final mx = sx / cnt, my = sy / cnt;
+    if (es.isEmpty || totalLen < 2 * s.maxRadiusPx) {
+      var cxx = 0.0, cyy = 0.0, cxy = 0.0;
+      for (var y = 0; y < bh; y++) {
+        for (var x = 0; x < bw; x++) {
+          if (m[y * bw + x] == 0) continue;
+          cxx += (x - mx) * (x - mx);
+          cyy += (y - my) * (y - my);
+          cxy += (x - mx) * (y - my);
+        }
+      }
+      final ang = 0.5 * math.atan2(2 * cxy, cxx - cyy);
+      final ux = math.cos(ang), uy = math.sin(ang);
+      double reach(double sgn) {
+        var t = 0.0;
+        while (t < bw + bh && inside(mx + 0.5 + ux * sgn * (t + 0.5), my + 0.5 + uy * sgn * (t + 0.5))) {
+          t += 0.5;
+        }
+        return t;
+      }
+
+      final ta = reach(-1), tb = reach(1);
+      final n = math.max(2, (ta + tb).ceil());
+      final line = [
+        for (var k = 0; k <= n; k++)
+          (mx + ux * (-ta + (ta + tb) * k / n), my + uy * (-ta + (ta + tb) * k / n)),
+      ];
+      final na = nodePos.length;
+      nodePos
+        ..add(line.first)
+        ..add(line.last);
+      es = [(na, na + 1, line)];
+    }
+
+    // ── Colonnes : ligne centrale lissée, prolongée, bords par lancer de rayons.
+    final deg = <int, int>{};
+    for (final e in es) {
+      deg[e.$1] = (deg[e.$1] ?? 0) + 1;
+      deg[e.$2] = (deg[e.$2] ?? 0) + 1;
+    }
+    final comp = o.pullCompMm * 10;
+
+    List<(double, double)> smooth(List<(double, double)> p) {
+      if (p.length < 5) return p;
+      return [
+        for (var i = 0; i < p.length; i++)
+          if (i == 0 || i == p.length - 1)
+            p[i]
+          else
+            () {
+              final lo = math.max(0, i - 3), hi = math.min(p.length - 1, i + 3);
+              var ax = 0.0, ay = 0.0;
+              for (var k = lo; k <= hi; k++) {
+                ax += p[k].$1;
+                ay += p[k].$2;
+              }
+              final c = hi - lo + 1;
+              return (ax / c, ay / c);
+            }(),
+      ];
+    }
+
+    List<(double, double)> resample(List<(double, double)> p, double step) {
+      final out = <(double, double)>[p.first];
+      var acc = 0.0;
+      for (var i = 1; i < p.length; i++) {
+        final dx = p[i].$1 - p[i - 1].$1, dy = p[i].$2 - p[i - 1].$2;
+        final seg = math.sqrt(dx * dx + dy * dy);
+        if (seg < 1e-9) continue;
+        var t = 0.0;
+        while (acc + (seg - t) >= step) {
+          t += step - acc;
+          acc = 0;
+          out.add((p[i - 1].$1 + dx * t / seg, p[i - 1].$2 + dy * t / seg));
+        }
+        acc += seg - t;
+      }
+      if (out.length < 2 || acc > step * 0.3) out.add(p.last);
+      return out;
+    }
+
+    (double, double) tangent(List<(double, double)> p, int i) {
+      final a0 = p[math.max(0, i - 1)], a1 = p[math.min(p.length - 1, i + 1)];
+      final dx = a1.$1 - a0.$1, dy = a1.$2 - a0.$2;
+      final l = math.sqrt(dx * dx + dy * dy);
+      return l < 1e-9 ? (1.0, 0.0) : (dx / l, dy / l);
+    }
+
+    final step = math.max(1.0, 8 / px); // ≈ 0,8 mm en pixels
+    final cols = <(List<_P>, List<_P>, List<_P>, List<_P>)>[]; // centre brut, centre, gauche, droite
+    for (final e in es) {
+      var c = resample(smooth(e.$3), step);
+      if (c.length < 2) c = [e.$3.first, e.$3.last];
+      final raw = [for (final p in c) toD(p.$1, p.$2)];
+      // Prolongements : jusqu'au bord pour une pointe, dans la jonction sinon.
+      List<(double, double)> extend((double, double) end, (double, double) dir, int node) {
+        final out = <(double, double)>[];
+        if ((deg[node] ?? 1) == 1) {
+          var t = step;
+          while (t < 4 * s.maxRadiusPx + 6 && inside(end.$1 + 0.5 + dir.$1 * t, end.$2 + 0.5 + dir.$2 * t)) {
+            out.add((end.$1 + dir.$1 * t, end.$2 + dir.$2 * t));
+            t += step;
+          }
+        } else {
+          final r = dtAt(nodePos[node].$1, nodePos[node].$2) * 0.8;
+          for (var t = step; t <= r; t += step) {
+            out.add((end.$1 + dir.$1 * t, end.$2 + dir.$2 * t));
+          }
+        }
+        return out;
+      }
+
+      final t0 = tangent(c, 0), t1 = tangent(c, c.length - 1);
+      final head = extend(c.first, (-t0.$1, -t0.$2), e.$1).reversed.toList();
+      final tail = extend(c.last, t1, e.$2);
+      final full = [...head, ...c, ...tail];
+      final cen = <_P>[], le = <_P>[], ri = <_P>[];
+      for (var i = 0; i < full.length; i++) {
+        final (tx, ty) = tangent(full, i);
+        final nx = -ty, ny = tx;
+        final (cx, cy) = full[i];
+        final limit = math.max(2.0, dtAt(cx, cy) * 1.7 + 1.5);
+        double ray(double sgn) {
+          var t = 0.0;
+          while (t < limit && inside(cx + 0.5 + nx * sgn * (t + 0.4), cy + 0.5 + ny * sgn * (t + 0.4))) {
+            t += 0.4;
+          }
+          return t;
+        }
+
+        final dl = ray(1), dr = ray(-1);
+        final cD = toD(cx, cy);
+        cen.add(cD);
+        le.add(_P(cD.x + nx * (dl * px + comp), cD.y + ny * (dl * px + comp)));
+        ri.add(_P(cD.x - nx * (dr * px + comp), cD.y - ny * (dr * px + comp)));
+      }
+      cols.add((raw, cen, le, ri));
+    }
+
+    // ── Plan : soutien en avançant (parcours en profondeur), satin en revenant.
+    final nodeD = [for (final p in nodePos) toD(p.$1, p.$2)];
+    final adj = <int, List<int>>{};
+    for (var k = 0; k < es.length; k++) {
+      adj.putIfAbsent(es[k].$1, () => []).add(k);
+      adj.putIfAbsent(es[k].$2, () => []).add(k);
+    }
+    var root = es.first.$1;
+    var bd = double.infinity;
+    for (final n in adj.keys) {
+      final dd = nodeD[n].dist(_fresh ? toD(mx, my) : cur);
+      // On préfère démarrer sur une pointe.
+      final pen = (adj[n]!.length == 1) ? 0.0 : 30.0;
+      if (dd + pen < bd) {
+        bd = dd + pen;
+        root = n;
+      }
+    }
+    final order = <(int, int, int)>[]; // arête, nœud de départ, nœud d'arrivée
+    final usedE = <int>{};
+    void dfs(int n) {
+      for (final k in adj[n] ?? const <int>[]) {
+        if (usedE.contains(k)) continue;
+        usedE.add(k);
+        final other = es[k].$1 == n ? es[k].$2 : es[k].$1;
+        order.add((k, n, other));
+        dfs(other);
+      }
+    }
+
+    dfs(root);
+
+    List<_P> centerPath(int k, int from) {
+      final r = cols[k].$1;
+      return es[k].$1 == from ? r : r.reversed.toList();
+    }
+
+    // Plus court chemin entre nœuds par les arêtes autorisées.
+    List<_P>? route(int from, int to, Set<int> allowed) {
+      if (from == to) return [nodeD[from]];
+      final dist = <int, double>{from: 0};
+      final prev = <int, (int, int)>{};
+      final open = <int>{from};
+      while (open.isNotEmpty) {
+        var u = open.first;
+        for (final v in open) {
+          if (dist[v]! < dist[u]!) u = v;
+        }
+        open.remove(u);
+        if (u == to) break;
+        for (final k in adj[u] ?? const <int>[]) {
+          if (!allowed.contains(k)) continue;
+          final v = es[k].$1 == u ? es[k].$2 : es[k].$1;
+          final nd = dist[u]! + cols[k].$1.length.toDouble();
+          if (nd < (dist[v] ?? double.infinity)) {
+            dist[v] = nd;
+            prev[v] = (u, k);
+            open.add(v);
+          }
+        }
+      }
+      if (!dist.containsKey(to)) return null;
+      final steps = <(int, int)>[];
+      var v = to;
+      while (v != from) {
+        final (u, k) = prev[v]!;
+        steps.add((u, k));
+        v = u;
+      }
+      final pts = <_P>[nodeD[from]];
+      for (final (u, k) in steps.reversed) {
+        pts.addAll(centerPath(k, u));
+      }
+      return pts;
+    }
+
+    final all = {for (var k = 0; k < es.length; k++) k};
+    _jumpTo(nodeD[root]);
+    var at = root;
+    if (o.underlay) {
+      for (final (k, from, to) in order) {
+        if (at != from) _runPoly(route(at, from, all) ?? [nodeD[from]]);
+        _runPoly(centerPath(k, from));
+        at = to;
+      }
+    }
+    final notDone = {...all};
+    for (final (k, from, to) in order.reversed) {
+      if (at != to) {
+        _runPoly(route(at, to, notDone) ?? route(at, to, all) ?? [nodeD[to]]);
+      }
+      final (_, cen, le, ri) = cols[k];
+      final fwd = es[k].$1 == to; // satin de « to » vers « from »
+      _satinColumn(fwd ? cen : cen.reversed.toList(), fwd ? le : le.reversed.toList(),
+          fwd ? ri : ri.reversed.toList());
+      notDone.remove(k);
+      at = from;
+    }
+    return true;
+  }
+
+  /// Satin à largeur variable : pas réglé sur le bord extérieur, points courts à
+  /// l'intérieur des courbes, points trop longs divisés en quinconce (invisible).
+  void _satinColumn(List<_P> c, List<_P> l, List<_P> r) {
+    final n = c.length;
+    if (n < 2) return;
+    final spacing = math.max(1.5, o.densityMm * 10);
+    _P at(List<_P> arr, double t) {
+      final i = t.floor().clamp(0, n - 2).toInt();
+      final f = t - i;
+      return _P(arr[i].x + (arr[i + 1].x - arr[i].x) * f, arr[i].y + (arr[i + 1].y - arr[i].y) * f);
+    }
+
+    var t = 0.0;
+    var k = 0;
+    const e = 0.05;
+    final end = (n - 1).toDouble();
+    while (true) {
+      final left = k.isEven;
+      var p = at(left ? l : r, t);
+      final t2 = math.min(end, t + e);
+      final sl = at(l, t2).dist(at(l, t)), sr = at(r, t2).dist(at(r, t));
+      final mine = left ? sl : sr, other = left ? sr : sl;
+      if ((k ~/ 2).isOdd && other > 1e-9 && mine / other < 0.65) {
+        final cc = at(c, t);
+        p = _P(cc.x + (p.x - cc.x) * 0.45, cc.y + (p.y - cc.y) * 0.45);
+      }
+      // Point long : divisé en quinconce pour garder l'aspect satin.
+      final d = cur.dist(p);
+      if (k > 0 && d > 70) {
+        final parts = (d / 60).ceil();
+        final s0 = cur;
+        for (var i = 1; i < parts; i++) {
+          final f = ((i + (k.isEven ? -0.2 : 0.2)) / parts).clamp(0.05, 0.95);
+          _stitch(_P(s0.x + (p.x - s0.x) * f, s0.y + (p.y - s0.y) * f));
+        }
+      }
+      _stitch(p);
+      if (t >= end) break;
+      final speed = math.max(math.max(sl, sr) / (t2 - t).clamp(1e-6, 1.0), 1e-6);
+      t = math.min(end, t + spacing / speed);
+      k++;
+      if (k > 500000) break;
+    }
+  }
+
   EmbPattern build(String name) {
     final groups = <int>{for (final s in a.shapes) if (!s.excluded) s.group}.toList()..sort();
     final colors = <int>[];
@@ -754,7 +1383,8 @@ class _Digitizer {
             bi = i;
           }
         }
-        _shape(left.removeAt(bi));
+        final sh = left.removeAt(bi);
+        if (!(sh.isSatin(a.pxMm) && _satinShape(sh))) _shape(sh);
       }
       firstGroup = false;
     }

@@ -221,4 +221,48 @@ void main() {
     final q = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37, 0xFFC8102E]));
     expect(q.stitchCount, lessThan(p.stitchCount));
   });
+
+  test('image → satin : formes fines en satin, longueurs sûres', () {
+    const w = 400, h = 200;
+    final rgba = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 255);
+    void black(int x, int y) {
+      final i = (y * w + x) * 4;
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+    }
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final d = (x - 100) * (x - 100) + (y - 100) * (y - 100);
+        if (d <= 70 * 70 && d >= 62 * 62) black(x, y); // anneau fin
+        final e = (x - 260) * (x - 260) + (y - 100) * (y - 100);
+        if (e <= 12 * 12) black(x, y); // point
+        if (x >= 320 && x < 330 && y >= 30 && y < 170) black(x, y); // trait
+      }
+    }
+    final a = analyzeImage(DigitizeInput(rgba, w, h, groups: 1));
+    expect(a.shapes.length, 3);
+    a.setWidthMm(120);
+    for (final s in a.shapes) {
+      expect(s.isSatin(a.pxMm), isTrue, reason: 'formes fines → satin en auto');
+    }
+    final satin = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37]));
+    expect(satin.stitchCount, greaterThan(300));
+    expect(satin.widthMm, closeTo(120, 4));
+    Stitch? prev;
+    for (final s in satin.stitches) {
+      if (s.isStitch && prev != null && prev.isStitch) {
+        expect(distance(prev, s), lessThan(121));
+      }
+      prev = s;
+    }
+    expect(readDst(writeDst(satin)).stitchCount, satin.stitchCount);
+    // Choix manuel : tout en tatami donne un autre résultat.
+    for (final s in a.shapes) {
+      s.mode = StitchMode.tatami;
+    }
+    final tat = digitize(a, const DigitizeOptions(groupColors: [0xFFD4AF37]));
+    expect(tat.stitchCount, isNot(satin.stitchCount));
+  });
 }

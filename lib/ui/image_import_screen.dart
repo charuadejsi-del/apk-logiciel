@@ -22,7 +22,11 @@ class ImageImportScreen extends StatefulWidget {
   State<ImageImportScreen> createState() => _ImageImportScreenState();
 }
 
+/// Effet d'un toucher sur une forme de l'aperçu.
+enum _Tap { remove, satin, tatami, auto }
+
 class _ImageImportScreenState extends State<ImageImportScreen> {
+  _Tap _tap = _Tap.remove;
   ImageAnalysis? _a;
   ui.Image? _overlay;
   String? _busy; // message pendant un calcul
@@ -92,12 +96,18 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
     final a = _a;
     if (a == null) return;
     final buf = Uint8List(a.w * a.h * 4);
+    a.setWidthMm(_widthCm * 10);
     final colorOf = [
       for (final s in a.shapes) s.excluded ? 0xFFD9D9D9 : _colors[s.group % _colors.length],
     ];
+    final satin = [for (final s in a.shapes) !s.excluded && s.isSatin(a.pxMm)];
     for (var i = 0; i < a.w * a.h; i++) {
       final l = a.labels[i];
-      final c = l == 0 ? 0xFFFFFFFF : colorOf[l - 1];
+      var c = l == 0 ? 0xFFFFFFFF : colorOf[l - 1];
+      // Satin : hachures claires ; tatami : aplat.
+      if (l != 0 && satin[l - 1] && ((i % a.w) + (i ~/ a.w)) % 8 < 3) {
+        c = Color.lerp(Color(c), Colors.white, 0.55)!.toARGB32();
+      }
       buf[i * 4] = (c >> 16) & 0xFF;
       buf[i * 4 + 1] = (c >> 8) & 0xFF;
       buf[i * 4 + 2] = c & 0xFF;
@@ -131,8 +141,21 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
           final l = a.labels[yy * a.w + xx];
           if (l > 0) {
             final s = a.shapes[l - 1];
-            s.excluded = !s.excluded;
+            switch (_tap) {
+              case _Tap.remove:
+                s.excluded = !s.excluded;
+              case _Tap.satin:
+                s.excluded = false;
+                s.mode = StitchMode.satin;
+              case _Tap.tatami:
+                s.excluded = false;
+                s.mode = StitchMode.tatami;
+              case _Tap.auto:
+                s.excluded = false;
+                s.mode = StitchMode.auto;
+            }
             _refreshOverlay();
+            setState(() {});
             return;
           }
         }
@@ -147,6 +170,16 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
       groupShapes(a.shapes, k);
       _refreshOverlay();
     }
+    setState(() {});
+  }
+
+  void _setModeForGroup(int? group, StitchMode m) {
+    final a = _a;
+    if (a == null) return;
+    for (final s in a.shapes) {
+      if (group == null || s.group == group) s.mode = m;
+    }
+    _refreshOverlay();
     setState(() {});
   }
 
@@ -337,7 +370,7 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                 const SizedBox(height: 16),
                                 const Text(
                                   'Choisissez un dessin noir sur fond blanc (PNG ou JPG).\n'
-                                  'Chaque forme noire devient un remplissage tatami.',
+                                  'Les formes fines passent en satin, les larges en tatami ; vous pouvez choisir forme par forme.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(color: AppColors.muted),
                                 ),
@@ -383,15 +416,126 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                 Text('$active formes',
                                     style: const TextStyle(fontWeight: FontWeight.w700)),
                                 const SizedBox(width: 8),
-                                const Expanded(
-                                  child: Text('Touchez une forme pour la retirer ou la remettre',
-                                      style: TextStyle(color: AppColors.muted, fontSize: 12)),
+                                Expanded(
+                                  child: Text(
+                                      switch (_tap) {
+                                        _Tap.remove => 'Touchez une forme pour la retirer ou la remettre',
+                                        _Tap.satin => 'Touchez les formes à broder en satin',
+                                        _Tap.tatami => 'Touchez les formes à broder en tatami',
+                                        _Tap.auto => 'Touchez une forme pour la remettre en auto',
+                                      },
+                                      style: const TextStyle(color: AppColors.muted, fontSize: 12)),
                                 ),
                                 TextButton(
                                   onPressed: _busy == null ? _pick : null,
                                   child: const Text('Autre image'),
                                 ),
                               ]),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Row(children: [
+                                for (final (t, label, icon) in const [
+                                  (_Tap.remove, 'Retirer', Icons.remove_circle_outline),
+                                  (_Tap.satin, 'Satin', Icons.format_align_justify),
+                                  (_Tap.tatami, 'Tatami', Icons.grid_on),
+                                  (_Tap.auto, 'Auto', Icons.auto_awesome),
+                                ])
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(14),
+                                        onTap: () => setState(() => _tap = t),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
+                                          decoration: BoxDecoration(
+                                            gradient: _tap == t ? goldGradient : null,
+                                            color: _tap == t ? null : AppColors.surface2,
+                                            borderRadius: BorderRadius.circular(14),
+                                            border: Border.all(
+                                                color: _tap == t ? AppColors.gold : AppColors.border),
+                                          ),
+                                          child: Column(children: [
+                                            Icon(icon,
+                                                size: 20,
+                                                color: _tap == t ? Colors.black : AppColors.gold),
+                                            const SizedBox(height: 2),
+                                            Text(label,
+                                                style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: _tap == t ? Colors.black : AppColors.text)),
+                                          ]),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ]),
+                            ),
+                            _section(
+                              'Type de point',
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(children: [
+                                    _chip('Tout auto', false,
+                                        () => _setModeForGroup(null, StitchMode.auto)),
+                                    _chip('Tout satin', false,
+                                        () => _setModeForGroup(null, StitchMode.satin)),
+                                    _chip('Tout tatami', false,
+                                        () => _setModeForGroup(null, StitchMode.tatami)),
+                                  ]),
+                                  for (var g = 0; g < _groups; g++)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Row(children: [
+                                        Container(
+                                          width: 22,
+                                          height: 22,
+                                          margin: const EdgeInsets.only(right: 10, bottom: 8),
+                                          decoration: BoxDecoration(
+                                              color: Color(_colors[g]), shape: BoxShape.circle),
+                                        ),
+                                        Expanded(
+                                          child: Wrap(children: [
+                                            for (final m in StitchMode.values)
+                                              _chip(
+                                                switch (m) {
+                                                  StitchMode.auto => 'Auto',
+                                                  StitchMode.satin => 'Satin',
+                                                  StitchMode.tatami => 'Tatami',
+                                                },
+                                                a.shapes
+                                                    .where((x) => x.group == g)
+                                                    .every((x) => x.mode == m),
+                                                () => _setModeForGroup(g, m),
+                                              ),
+                                          ]),
+                                        ),
+                                      ]),
+                                    ),
+                                  Builder(builder: (_) {
+                                    var nS = 0, nT = 0, wide = 0;
+                                    for (final x in a.shapes) {
+                                      if (x.excluded) continue;
+                                      if (x.isSatin(_widthCm * 10 / math.max(1, a.designW))) {
+                                        nS++;
+                                        if (x.widthMm(_widthCm * 10 / math.max(1, a.designW)) > 10) {
+                                          wide++;
+                                        }
+                                      } else {
+                                        nT++;
+                                      }
+                                    }
+                                    return Text(
+                                      '$nS en satin (hachuré) · $nT en tatami (plein)'
+                                      '${wide > 0 ? '\n$wide formes larges en satin : points longs divisés automatiquement' : ''}',
+                                      style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                                    );
+                                  }),
+                                ],
+                              ),
                             ),
                             _section(
                               'Largeur du dessin',
@@ -402,6 +546,7 @@ class _ImageImportScreenState extends State<ImageImportScreen> {
                                   max: 40,
                                   divisions: 74,
                                   onChanged: (v) => setState(() => _widthCm = v),
+                                  onChangeEnd: (_) => _refreshOverlay(),
                                 ),
                                 if (_widthCm > 20 || heightCm > 20)
                                   const Text(
