@@ -237,7 +237,7 @@ void main() {
         final d = (x - 100) * (x - 100) + (y - 100) * (y - 100);
         if (d <= 70 * 70 && d >= 62 * 62) black(x, y); // anneau fin
         final e = (x - 260) * (x - 260) + (y - 100) * (y - 100);
-        if (e <= 12 * 12) black(x, y); // point
+        if (e <= 7 * 7) black(x, y); // point (≈ 5,6 mm)
         if (x >= 320 && x < 330 && y >= 30 && y < 170) black(x, y); // trait
       }
     }
