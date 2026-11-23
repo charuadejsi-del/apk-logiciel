@@ -53,6 +53,13 @@ class PatternGeometry {
   }
 
   int get total => stitches.length;
+
+  Stitch? get lastStitch {
+    for (var i = stitches.length - 1; i >= 0; i--) {
+      if (stitches[i].isStitch) return stitches[i];
+    }
+    return null;
+  }
   int segmentsOfBlock(int b) => endIndex[b].length;
 }
 
@@ -74,8 +81,10 @@ class PatternPainter extends CustomPainter {
   final int progress; // index de la dernière instruction affichée
   final bool showNeedle;
   final bool realistic;
+  final bool showStartEnd;
 
-  PatternPainter(this.g, this.progress, {this.showNeedle = false, this.realistic = true});
+  PatternPainter(this.g, this.progress,
+      {this.showNeedle = false, this.realistic = true, this.showStartEnd = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -125,6 +134,21 @@ class PatternPainter extends CustomPainter {
       }
     }
 
+    if (showStartEnd) {
+      final r = 7 / scale;
+      // Départ (origine machine) : anneau vert. Fin : point rouge.
+      canvas.drawCircle(Offset.zero, r * 1.6,
+          Paint()
+            ..color = const Color(0xFF4ADE80)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = r * 0.6);
+      final last = g.lastStitch;
+      if (last != null) {
+        canvas.drawCircle(Offset(last.x.toDouble(), last.y.toDouble()), r,
+            Paint()..color = const Color(0xFFF87171));
+      }
+    }
+
     if (showNeedle && progress >= 0 && progress < g.total) {
       final s = g.stitches[progress];
       final o = Offset(s.x.toDouble(), s.y.toDouble());
@@ -170,5 +194,6 @@ class PatternPainter extends CustomPainter {
       old.g != g ||
       old.progress != progress ||
       old.showNeedle != showNeedle ||
-      old.realistic != realistic;
+      old.realistic != realistic ||
+      old.showStartEnd != showStartEnd;
 }

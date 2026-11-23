@@ -137,10 +137,18 @@ Uint8List writeDst(EmbPattern pattern) {
     }
   }
 
+  var needJump = true; // début du motif, ou après une coupe / un changement de couleur
   for (final s in pattern.stitches) {
     switch (s.type) {
       case StitchType.stitch:
-        moveTo(s.x, s.y, _flagStitch);
+        if (needJump && (s.x != cx || s.y != cy)) {
+          // Ne jamais tirer un point depuis l'origine ou après une coupe : on saute d'abord.
+          moveTo(s.x, s.y, _flagJump);
+          rec(0, 0, _flagStitch);
+        } else {
+          moveTo(s.x, s.y, _flagStitch);
+        }
+        needJump = false;
       case StitchType.jump:
         moveTo(s.x, s.y, _flagJump);
       case StitchType.trim:
@@ -149,9 +157,11 @@ Uint8List writeDst(EmbPattern pattern) {
         rec(-4, -4, _flagJump);
         rec(2, 2, _flagJump);
         moveTo(s.x, s.y, _flagJump);
+        needJump = true;
       case StitchType.colorChange:
         moveTo(s.x, s.y, _flagJump);
         rec(0, 0, _flagColor);
+        needJump = true;
       case StitchType.end:
         break;
     }

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../core/demo.dart';
 import '../core/formats.dart';
+import 'text_editor_screen.dart';
 import 'theme.dart';
 import 'viewer_screen.dart';
 
@@ -182,9 +183,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       children: [
                         _tile(Icons.auto_awesome, 'Démonstration',
                             'Voir un motif complet', _openDemo),
-                        _tile(Icons.text_fields, 'Texte brodé', 'Noms et lettres',
-                            () => _soon('Le texte brodé'),
-                            soon: true),
+                        _tile(Icons.text_fields, 'Texte brodé', 'Noms en point satin',
+                            () => Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const TextEditorScreen()))),
                         _tile(Icons.dashboard_customize_outlined, 'Modèles',
                             'Motifs prêts', () => _soon('La bibliothèque de modèles'),
                             soon: true),
@@ -194,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ],
                     ),
                     const SizedBox(height: 28),
-                    const Text('Version prototype · phase 0',
+                    const Text('Version 0.2 · texte brodé, taille, densité, départ',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Color(0xFF5C5A55), fontSize: 11)),
                   ],
