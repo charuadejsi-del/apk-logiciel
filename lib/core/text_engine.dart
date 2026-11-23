@@ -62,7 +62,7 @@ class TextDesign {
   const TextDesign({
     this.text = 'FARES',
     this.heightMm = 20,
-    this.letterSpacingMm = 1.5,
+    this.letterSpacingMm = 2.0,
     this.autoWidth = true,
     this.columnWidthMm = 3,
     this.autoDensity = true,
@@ -212,7 +212,10 @@ List<_V> _dedupe(List<_V> pts) {
 class _Stroke {
   final List<_V> pts;
   final bool closed;
-  _Stroke(this.pts, this.closed);
+
+  /// Prolonger le début / la fin d'une demi-colonne (angles fermés, extrémités libres).
+  final bool extStart, extEnd;
+  _Stroke(this.pts, this.closed, {this.extStart = true, this.extEnd = true});
 
   /// Variante qui commence le plus près de [from] (inversée ou tournée si besoin).
   _Stroke orientedFrom(_V from) {
@@ -224,21 +227,66 @@ class _Stroke {
       return _Stroke([...pts.sublist(best), ...pts.sublist(0, best)], true);
     }
     return pts.last.dist(from) < pts.first.dist(from)
-        ? _Stroke(pts.reversed.toList(), false)
+        ? _Stroke(pts.reversed.toList(), false, extStart: extEnd, extEnd: extStart)
         : this;
   }
 
-  /// Prolonge les extrémités d'une ligne ouverte pour fermer les angles.
+  /// Prolonge les extrémités d'une ligne ouverte.
   _Stroke extended(double ext) {
     if (closed || pts.length < 2) return this;
     final d0 = (pts[1] - pts[0]).unit;
     final d1 = (pts[pts.length - 1] - pts[pts.length - 2]).unit;
     return _Stroke([
-      pts.first - d0 * ext,
+      extStart ? pts.first - d0 * ext : pts.first,
       ...pts.sublist(1, pts.length - 1),
-      pts.last + d1 * ext,
-    ], false);
+      extEnd ? pts.last + d1 * ext : pts.last,
+    ], false, extStart: false, extEnd: false);
   }
+}
+
+/// Décide quelles extrémités prolonger dans une lettre.
+/// - extrémité libre ou posée sur le milieu d'une autre ligne : prolongée ;
+/// - extrémité partagée (angle) : seule la première ligne horizontale ou verticale
+///   du groupe est prolongée (angle bien fermé, sans « corne ») ; sinon aucune.
+List<(bool, bool)> _extensionFlags(List<GlyphStroke> strokes) {
+  const tol = 0.5;
+  const axisTol = 0.18; // environ 10°
+  _V pt(Pt p) => _V(p.$1, p.$2);
+
+  // (index de ligne, est-ce le début ?) → direction qui entre dans la ligne
+  _V dirInto(int i, bool start) {
+    final pts = strokes[i].points;
+    return start
+        ? (pt(pts[1]) - pt(pts[0])).unit
+        : (pt(pts[pts.length - 2]) - pt(pts[pts.length - 1])).unit;
+  }
+
+  bool axisAligned(_V d) => d.x.abs() < axisTol || d.y.abs() < axisTol;
+
+  bool decide(int i, bool start) {
+    final pts = strokes[i].points;
+    final p = pt(start ? pts.first : pts.last);
+    final group = <(int, bool)>[(i, start)];
+    for (var j = 0; j < strokes.length; j++) {
+      if (j == i || strokes[j].closed || strokes[j].points.length < 2) continue;
+      final q = strokes[j].points;
+      if (pt(q.first).dist(p) < tol) group.add((j, true));
+      if (pt(q.last).dist(p) < tol) group.add((j, false));
+    }
+    if (group.length == 1) return true;
+    group.sort((a, b) => a.$1.compareTo(b.$1));
+    for (final (j, st) in group) {
+      if (axisAligned(dirInto(j, st))) return j == i && st == start;
+    }
+    return false;
+  }
+
+  return [
+    for (var i = 0; i < strokes.length; i++)
+      strokes[i].closed || strokes[i].points.length < 2
+          ? (false, false)
+          : (decide(i, true), decide(i, false)),
+  ];
 }
 
 // ───────────────────────── Génération ─────────────────────────
@@ -348,10 +396,15 @@ class _TextBuilder {
     for (final r in d.normalized.runes) {
       final g = blockFont[String.fromCharCode(r)];
       if (g == null) continue;
+      final flags = _extensionFlags(g.strokes);
       final strokes = <_Stroke>[
-        for (final gs in g.strokes)
-          _Stroke([for (final p in gs.points) _V(cursor + p.$1 * scale, p.$2 * scale)],
-              gs.closed),
+        for (var k = 0; k < g.strokes.length; k++)
+          _Stroke(
+            [for (final p in g.strokes[k].points) _V(cursor + p.$1 * scale, p.$2 * scale)],
+            g.strokes[k].closed,
+            extStart: flags[k].$1,
+            extEnd: flags[k].$2,
+          ),
       ];
       if (strokes.isNotEmpty) letters.add(strokes);
       cursor += g.width * scale + gap;
@@ -365,7 +418,9 @@ class _TextBuilder {
 
     for (final strokes in letters) {
       final remaining = [
-        for (final s in strokes) _Stroke([for (final p in s.pts) p + off], s.closed),
+        for (final s in strokes)
+          _Stroke([for (final p in s.pts) p + off], s.closed,
+              extStart: s.extStart, extEnd: s.extEnd),
       ];
       var first = true;
       while (remaining.isNotEmpty) {
