@@ -25,12 +25,14 @@ class PieceScreen extends StatefulWidget {
   final PrepPiece piece;
   final double hoopWmm, hoopHmm;
   final String suggestedName;
+  final int startStep; // 1 : directement au cadre (dessin qui tient déjà)
   const PieceScreen({
     super.key,
     required this.piece,
     required this.hoopWmm,
     required this.hoopHmm,
     required this.suggestedName,
+    this.startStep = 0,
   });
 
   @override
@@ -38,7 +40,7 @@ class PieceScreen extends StatefulWidget {
 }
 
 class _PieceScreenState extends State<PieceScreen> {
-  int _step = 0;
+  late int _step = widget.startStep;
   late EmbPattern _base = widget.piece.pattern; // après réglage de densité
   CountResult? _count;
   final _target = TextEditingController();
@@ -64,6 +66,7 @@ class _PieceScreenState extends State<PieceScreen> {
     _rotate = !fitsHoop(p, widget.hoopWmm, widget.hoopHmm) &&
         fitsHoop(rotate90(p), widget.hoopWmm, widget.hoopHmm);
     _setPreview(p);
+    if (_step == 1) WidgetsBinding.instance.addPostFrameCallback((_) => _buildFinal());
   }
 
   @override

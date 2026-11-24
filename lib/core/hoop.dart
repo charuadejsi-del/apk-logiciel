@@ -873,3 +873,17 @@ bool fitsHoop(EmbPattern p, double hoopWmm, double hoopHmm) {
   final b = p.bounds;
   return b.width <= hoopWmm * 10 && b.height <= hoopHmm * 10;
 }
+
+/// Rotation libre (degrés, sens horaire) autour du centre du dessin.
+EmbPattern rotateDeg(EmbPattern p, double deg) {
+  final d = deg % 360;
+  if (d == 0) return p;
+  final b = p.bounds;
+  final cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+  final a = d * math.pi / 180, c = math.cos(a), s = math.sin(a);
+  return p.copyWith(stitches: [
+    for (final t in p.stitches)
+      Stitch((cx + (t.x - cx) * c - (t.y - cy) * s).round(), (cy + (t.x - cx) * s + (t.y - cy) * c).round(),
+          t.type)
+  ]);
+}

@@ -36,8 +36,28 @@ class CutScreen extends StatefulWidget {
 }
 
 class _CutScreenState extends State<CutScreen> {
-  late final PatternGeometry _geo = PatternGeometry.from(widget.pattern);
-  late final Bounds _b = widget.pattern.bounds;
+  int _angle = 0; // rotation du dessin, par pas de 15°
+  late EmbPattern _work = widget.pattern; // dessin tourné
+  late PatternGeometry _geo = PatternGeometry.from(widget.pattern);
+  late Bounds _b = widget.pattern.bounds;
+
+  bool get _fitsWhole => fitsHoop(_work, _hw, _hh);
+
+  void _setAngle(int a) {
+    a = ((a % 360) + 360) % 360;
+    if (a == _angle) return;
+    setState(() {
+      _angle = a;
+      _work = rotateDeg(widget.pattern, a.toDouble());
+      _geo = PatternGeometry.from(_work);
+      _b = _work.bounds;
+      _lines.clear(); // les lignes ne correspondent plus au dessin tourné
+      _saved.clear();
+      _sel = null;
+      _tc.value = Matrix4.identity();
+    });
+    _schedule();
+  }
   final _tc = TransformationController();
 
   Hoop _hoop = hoopPresets.first;
@@ -107,7 +127,7 @@ class _CutScreenState extends State<CutScreen> {
   Future<void> _run() async {
     final job = ++_job;
     setState(() => _busy = true);
-    final r = await compute(cutRequest, CutRequest(widget.pattern, List.of(_lines), _opts));
+    final r = await compute(cutRequest, CutRequest(_work, List.of(_lines), _opts));
     if (!mounted || job != _job) return;
     final img = await _zoneImage(r);
     if (!mounted || job != _job) {
@@ -135,7 +155,9 @@ class _CutScreenState extends State<CutScreen> {
     if (r.gw == 0 || r.pieces.isEmpty) return null;
     final colorOf = <int, int>{};
     for (var i = 0; i < r.pieces.length; i++) {
-      final c = _fits(r.pieces[i]) ? _zoneColors[i % _zoneColors.length] : AppColors.danger;
+      final c = !_fits(r.pieces[i])
+          ? AppColors.danger
+          : (r.pieces.length == 1 ? AppColors.success : _zoneColors[i % _zoneColors.length]);
       colorOf[r.pieceRegion[i]] = c.toARGB32();
     }
     final px = Uint8List(r.gw * r.gh * 4);
@@ -346,7 +368,8 @@ class _CutScreenState extends State<CutScreen> {
 
   Future<File> _projectFile() async {
     final dir = await getApplicationSupportDirectory();
-    final id = '${widget.pattern.name}_${widget.pattern.stitchCount}_${_b.width}x${_b.height}'
+    final ob = widget.pattern.bounds;
+    final id = '${widget.pattern.name}_${widget.pattern.stitchCount}_${ob.width}x${ob.height}'
         .replaceAll(RegExp(r'[^A-Za-z0-9_x]'), '');
     return File('${dir.path}${Platform.pathSeparator}coupe_$id.json');
   }
@@ -356,6 +379,7 @@ class _CutScreenState extends State<CutScreen> {
       final f = await _projectFile();
       await f.writeAsString(jsonEncode({
         'hoop': _custom ? null : hoopPresets.indexOf(_hoop),
+        'angle': _angle,
         'cw': _cw,
         'ch': _ch,
         'overlap': _overlap,
@@ -384,6 +408,13 @@ class _CutScreenState extends State<CutScreen> {
       ];
       if (!mounted) return;
       final hi = m['hoop'] as int?;
+      final ang = (m['angle'] as int?) ?? 0;
+      if (ang != 0) {
+        _angle = ang;
+        _work = rotateDeg(widget.pattern, ang.toDouble());
+        _geo = PatternGeometry.from(_work);
+        _b = _work.bounds;
+      }
       setState(() {
         if (hi != null && hi >= 0 && hi < hoopPresets.length) {
           _hoop = hoopPresets[hi];
@@ -529,7 +560,7 @@ class _CutScreenState extends State<CutScreen> {
 
   Future<void> _auto() async {
     final o = _opts;
-    final lines = await compute(_suggest, (widget.pattern, o));
+    final lines = await compute(_suggest, (_work, o));
     if (!mounted) return;
     setState(() {
       _lines
@@ -824,6 +855,56 @@ class _CutScreenState extends State<CutScreen> {
     );
   }
 
+  Widget _rotationSection(bool fits) {
+    Widget arrow(IconData i, String tip, VoidCallback f) => Material(
+          color: AppColors.surface2,
+          shape: const CircleBorder(side: BorderSide(color: AppColors.gold)),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: f,
+            child: Tooltip(
+                message: tip,
+                child: Padding(padding: const EdgeInsets.all(12), child: Icon(i, color: AppColors.gold, size: 26))),
+          ),
+        );
+    return luxSection(
+      'Tourner le dessin (pas de 15°)',
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          arrow(Icons.rotate_left, 'Tourner de 15° à gauche', () => _setAngle(_angle - 15)),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(children: [
+              Text('${_angle > 180 ? _angle - 360 : _angle}°',
+                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: AppColors.goldLight)),
+              if (_angle != 0)
+                TextButton(onPressed: () => _setAngle(0), child: const Text('Remettre à 0°')),
+            ]),
+          ),
+          const SizedBox(width: 14),
+          arrow(Icons.rotate_right, 'Tourner de 15° à droite', () => _setAngle(_angle + 15)),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          fits
+              ? '✓ Le dessin tient dans le cadre : pas besoin de le couper'
+              : '✗ Le dessin dépasse le cadre : tournez-le ou coupez-le',
+          style: TextStyle(color: fits ? AppColors.success : AppColors.danger, fontWeight: FontWeight.w700),
+        ),
+      ]),
+    );
+  }
+
+  /// Le dessin entier tient dans le cadre : directement cadre et départ, puis enregistrement.
+  Future<void> _openWhole() async {
+    var base = widget.pattern.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (base.isEmpty) base = 'DESIGN';
+    final piece = PrepPiece(1, 0, 0, _work.bounds, _work, 0, 0);
+    await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PieceScreen(piece: piece, hoopWmm: _hw, hoopHmm: _hh, suggestedName: base, startStep: 1),
+    ));
+  }
+
   Widget _hoopSection() => luxSection(
         'Cadre (tambour) de votre machine',
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -872,12 +953,14 @@ class _CutScreenState extends State<CutScreen> {
   List<Widget> _controls() {
     switch (_step) {
       case 0:
+        final fits = _fitsWhole;
         return [
+          _rotationSection(fits),
           _hoopSection(),
           GoldButton(
-              label: 'Suivant : couper le dessin',
+              label: fits ? 'Suivant : cadre et départ' : 'Suivant : couper le dessin',
               icon: Icons.arrow_forward,
-              onPressed: () => setState(() => _step = 1)),
+              onPressed: fits ? _openWhole : () => setState(() => _step = 1)),
         ];
       case 1:
         final r = _res;
