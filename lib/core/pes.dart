@@ -199,7 +199,7 @@ Uint8List _pecStitches(EmbPattern p) {
   var x = 0, y = 0;
   var colorTwo = true;
   void long(int dx, int dy, int flag) {
-    final a = (dx & 0x0FFF) | 0x8000 | flag, c = (dy & 0x0FFF) | 0x8000 | flag;
+    final a = (dx & 0x0FFF) | 0x8000 | (flag << 8), c = (dy & 0x0FFF) | 0x8000 | (flag << 8);
     o.add([(a >> 8) & 0xFF, a & 0xFF, (c >> 8) & 0xFF, c & 0xFF]);
   }
 

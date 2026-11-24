@@ -228,7 +228,7 @@ List<Stitch> _between(List<Stitch> a, List<Stitch> b, double t, double step, dou
   final m = math.max(1, (len / math.max(10, step)).round());
   final out = <Stitch>[s];
   for (var k = 1; k < m; k++) {
-    final u = ((k - phase) / m).clamp(0.0, 1.0);
+    final u = ((k - phase / 2) / m).clamp(0.0, 1.0); // décalage (point tatami en quinconce)
     out.add(_lerp(at(a, u), at(b, u), t));
   }
   out.add(e);
