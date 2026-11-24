@@ -65,8 +65,10 @@ class PrepPiece {
   final EmbPattern pattern; // prêt à coudre (cadre, repères, dessin, départ)
   final int wholeObjects; // éléments gardés entiers (non coupés) au-delà de la ligne
   final int cutObjects; // éléments coupés à la ligne
+  final int originX, originY; // position du départ dans le dessin d'origine
   const PrepPiece(this.index, this.col, this.row, this.window, this.pattern, this.wholeObjects,
-      this.cutObjects);
+      this.cutObjects,
+      [this.originX = 0, this.originY = 0]);
 }
 
 class PrepResult {
@@ -434,16 +436,16 @@ PrepResult prepareForHoop(EmbPattern p, PrepOptions o) {
     }
 
     final an = o.pieceAnchors[pieces.length + 1] ?? o.anchor;
-    final piece = _assemble(p, content[i], area, marks, o, m, an,
+    final (piece, ox, oy) = _assemble(p, content[i], area, marks, o, m, an,
         cols * rows == 1 ? p.name : '${p.name}_${pieces.length + 1}');
-    pieces.add(PrepPiece(pieces.length + 1, c, r, w, piece, whole[i], cut[i]));
+    pieces.add(PrepPiece(pieces.length + 1, c, r, w, piece, whole[i], cut[i], ox, oy));
   }
   return PrepResult(xs, ys, pieces);
 }
 
 /// Assemble un morceau : cadre (cousu en premier, depuis le coin le plus proche
 /// du départ), croix de repérage, puis le dessin ; origine au point de départ.
-EmbPattern _assemble(EmbPattern p, List<(_Obj, List<List<Stitch>>, bool)> content, Bounds area,
+(EmbPattern, int, int) _assemble(EmbPattern p, List<(_Obj, List<List<Stitch>>, bool)> content, Bounds area,
     List<(int, int)> marks, PrepOptions o, int m, StartAnchor an, String name) {
   final runLen = (o.runMm * 10).round();
   final out = <Stitch>[];
@@ -514,10 +516,14 @@ EmbPattern _assemble(EmbPattern p, List<(_Obj, List<List<Stitch>>, bool)> conten
   out.add(Stitch(last!.x, last!.y, StitchType.end));
   colors = [for (final bl in blocks) p.colorOfBlock(bl)];
   // Origine machine au point de départ choisi.
-  return EmbPattern(
+  return (
+    EmbPattern(
     name: name,
     stitches: [for (final s in out) Stitch(s.x - sx, s.y - sy, s.type)],
     colors: colors,
+    ),
+    sx,
+    sy,
   );
 }
 
@@ -847,13 +853,13 @@ CutResult cutByLines(EmbPattern p, List<List<(double, double)>> lines, PrepOptio
     }
     final idx = pieces.length + 1;
     final an = o.pieceAnchors[idx] ?? o.anchor;
-    final piece = _assemble(p, content[r], area, marksOf[r], o, m, an, '${p.name}_$idx');
-    pieces.add(PrepPiece(idx, 0, 0, box, piece, whole[r], cutN[r]));
+    final (piece, ox, oy) = _assemble(p, content[r], area, marksOf[r], o, m, an, '${p.name}_$idx');
+    pieces.add(PrepPiece(idx, 0, 0, box, piece, whole[r], cutN[r], ox, oy));
     pieceRegion.add(r);
   }
   if (pieces.length == 1) {
     pieces[0] = PrepPiece(1, 0, 0, pieces[0].window, pieces[0].pattern.copyWith(name: p.name),
-        pieces[0].wholeObjects, pieces[0].cutObjects);
+        pieces[0].wholeObjects, pieces[0].cutObjects, pieces[0].originX, pieces[0].originY);
   }
   return CutResult(pieces, pieceRegion, labels, gw, gh, gx0, gy0, res);
 }

@@ -22,12 +22,16 @@ class ViewerScreen extends StatefulWidget {
   /// sont alors recalculées entièrement au lieu d'être approchées.
   final TextDesign? textDesign;
 
+  /// Outil à ouvrir directement ('small' : petits points).
+  final String? startTool;
+
   const ViewerScreen({
     super.key,
     required this.pattern,
     this.sourceBytes,
     this.sourceFormat = 'demo',
     this.textDesign,
+    this.startTool,
   });
 
   @override
@@ -58,6 +62,11 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
     _design = widget.textDesign;
     _anchor = _design != null ? StartAnchor.center : StartAnchor.original;
     _setBase(widget.pattern);
+    if (widget.startTool == 'small') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _smallStitches();
+      });
+    }
   }
 
   void _setBase(EmbPattern p) {
@@ -831,9 +840,6 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(color: AppColors.border),
-                  boxShadow: const [
-                    BoxShadow(color: Color(0x88000000), blurRadius: 24, offset: Offset(0, 10)),
-                  ],
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: InteractiveViewer(

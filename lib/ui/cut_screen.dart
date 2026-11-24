@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../core/hoop.dart';
@@ -46,11 +47,20 @@ class _CutScreenState extends State<CutScreen> {
   final Map<int, StartAnchor> _pieceAnchors = {};
 
   final List<List<(double, double)>> _lines = [];
-  List<(double, double)>? _drawing;
-  bool _drawMode = true;
+  _Tool _tool = _Tool.line;
+  // Trait en cours (aperçu) : seul le calque des lignes est redessiné.
+  final ValueNotifier<List<(double, double)>?> _preview = ValueNotifier(null);
+  final ValueNotifier<int?> _selLine = ValueNotifier(null);
+  List<(double, double)>? _poly; // ligne brisée en cours
+  (int, int)? _dragEnd; // (ligne, extrémité) déplacée
+  Offset? _downAt;
+  DateTime _lastDown = DateTime(0);
+  bool _split = true; // vue des morceaux séparés
 
   CutResult? _res;
   ui.Image? _zones;
+  ui.Image? _pieces; // morceaux séparés, déjà dessinés
+  Size _canvasSize = Size.zero;
   final Map<PrepPiece, PatternGeometry> _geoCache = {};
   int? _sel;
   bool _busy = false;
@@ -69,6 +79,9 @@ class _CutScreenState extends State<CutScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _preview.dispose();
+    _selLine.dispose();
+    _pieces?.dispose();
     _tc.dispose();
     _zones?.dispose();
     super.dispose();
@@ -108,6 +121,7 @@ class _CutScreenState extends State<CutScreen> {
       _geoCache.clear();
       if (_sel != null && _sel! > r.pieces.length) _sel = null;
     });
+    _rebuildPieces();
   }
 
   bool _fits(PrepPiece p) {
@@ -151,70 +165,179 @@ class _CutScreenState extends State<CutScreen> {
 
   // ───────────── Tracé ─────────────
 
-  void _start(Offset o, Size s) {
-    if (!_drawMode) return;
-    setState(() => _drawing = [_toPattern(o, s)]);
+  // ───────────── Tracé : lignes droites (glisser) ou brisées (clics) ─────────────
+
+  double _px() {
+    final (k, _, _) = _base(_canvasSize);
+    return 1 / (k * _tc.value.getMaxScaleOnAxis()); // 1 pixel écran en 0,1 mm
   }
 
-  void _move(Offset o, Size s) {
-    final d = _drawing;
-    if (d == null) return;
-    final p = _toPattern(o, s);
-    final (k, _, _) = _base(s);
-    final zoom = _tc.value.getMaxScaleOnAxis();
-    // Un point tous les ~3 px à l'écran : trait fluide sans surcharge.
-    final minStep = 3 / (k * zoom);
-    final l = d.last;
-    if (math.sqrt(math.pow(p.$1 - l.$1, 2) + math.pow(p.$2 - l.$2, 2)) < minStep) return;
-    setState(() => d.add(p));
+  /// Aimant horizontal / vertical (à moins de 6°).
+  (double, double) _snap((double, double) from, (double, double) to) {
+    final dx = to.$1 - from.$1, dy = to.$2 - from.$2;
+    final a = math.atan2(dy.abs(), dx.abs()) * 180 / math.pi;
+    if (a < 6) return (to.$1, from.$2);
+    if (a > 84) return (from.$1, to.$2);
+    return to;
   }
 
-  void _end() {
-    final d = _drawing;
-    if (d == null) return;
-    setState(() {
-      _drawing = null;
-      if (d.length >= 2) {
-        _lines.add(_simplify(d, 4));
-        _pieceAnchors.clear();
-      }
-    });
-    _schedule();
+  double _dist((double, double) a, (double, double) b) =>
+      math.sqrt((a.$1 - b.$1) * (a.$1 - b.$1) + (a.$2 - b.$2) * (a.$2 - b.$2));
+
+  /// Distance d'un point à une ligne brisée.
+  double _distToLine((double, double) p, List<(double, double)> l) {
+    var best = double.infinity;
+    for (var i = 1; i < l.length; i++) {
+      final a = l[i - 1], b = l[i];
+      final dx = b.$1 - a.$1, dy = b.$2 - a.$2;
+      final len2 = dx * dx + dy * dy;
+      var t = len2 == 0 ? 0.0 : ((p.$1 - a.$1) * dx + (p.$2 - a.$2) * dy) / len2;
+      t = t.clamp(0.0, 1.0);
+      best = math.min(best, _dist(p, (a.$1 + dx * t, a.$2 + dy * t)));
+    }
+    return best;
   }
 
-  /// Douglas-Peucker : garde la forme du trait (tolérance en 0,1 mm).
-  static List<(double, double)> _simplify(List<(double, double)> pts, double tol) {
-    if (pts.length < 3) return pts;
-    final keep = List<bool>.filled(pts.length, false)
-      ..[0] = true
-      ..[pts.length - 1] = true;
-    final stack = <(int, int)>[(0, pts.length - 1)];
-    while (stack.isNotEmpty) {
-      final (a, z) = stack.removeLast();
-      var best = -1.0, bi = -1;
-      final ax = pts[a].$1, ay = pts[a].$2, zx = pts[z].$1, zy = pts[z].$2;
-      final dx = zx - ax, dy = zy - ay;
-      final len = math.sqrt(dx * dx + dy * dy);
-      for (var i = a + 1; i < z; i++) {
-        final d = len < 1e-9
-            ? math.sqrt(math.pow(pts[i].$1 - ax, 2) + math.pow(pts[i].$2 - ay, 2))
-            : ((pts[i].$1 - ax) * dy - (pts[i].$2 - ay) * dx).abs() / len;
-        if (d > best) {
-          best = d;
-          bi = i;
+  void _down(PointerDownEvent e) {
+    if (_tool == _Tool.pan) return;
+    if (e.buttons == kSecondaryMouseButton) {
+      _finishPoly();
+      return;
+    }
+    final p = _toPattern(e.localPosition, _canvasSize);
+    final tol = 14 * _px();
+    _downAt = e.localPosition;
+    if (_tool == _Tool.line) {
+      // Extrémité d'une ligne existante : on la déplace.
+      for (var i = 0; i < _lines.length; i++) {
+        final l = _lines[i];
+        if (_dist(p, l.first) < tol) {
+          _dragEnd = (i, 0);
+          _selLine.value = i;
+          return;
+        }
+        if (_dist(p, l.last) < tol) {
+          _dragEnd = (i, l.length - 1);
+          _selLine.value = i;
+          return;
         }
       }
-      if (best > tol && bi > 0) {
-        keep[bi] = true;
-        stack.add((a, bi));
-        stack.add((bi, z));
+      _preview.value = [p, p];
+      return;
+    }
+    // Ligne brisée : chaque clic pose un point, double-clic pour finir.
+    final now = DateTime.now();
+    final dbl = now.difference(_lastDown).inMilliseconds < 350;
+    _lastDown = now;
+    if (_poly == null) {
+      _poly = [p, p];
+    } else {
+      final fixed = _snap(_poly![_poly!.length - 2], p);
+      if (dbl || _dist(fixed, _poly![_poly!.length - 2]) < tol) {
+        _finishPoly();
+        return;
+      }
+      _poly![_poly!.length - 1] = fixed;
+      _poly!.add(fixed);
+    }
+    _preview.value = List.of(_poly!);
+  }
+
+  void _moveTo(Offset pos) {
+    if (_tool == _Tool.pan) return;
+    final p = _toPattern(pos, _canvasSize);
+    final de = _dragEnd;
+    if (de != null) {
+      final l = _lines[de.$1];
+      final other = de.$2 == 0 ? l[1] : l[l.length - 2];
+      l[de.$2] = _snap(other, p);
+      _preview.value = null;
+      _selLine.value = null;
+      _selLine.value = de.$1; // redessine
+      return;
+    }
+    if (_tool == _Tool.line) {
+      final pv = _preview.value;
+      if (pv == null) return;
+      _preview.value = [pv.first, _snap(pv.first, p)];
+      return;
+    }
+    final poly = _poly;
+    if (poly == null) return;
+    poly[poly.length - 1] = _snap(poly[poly.length - 2], p);
+    _preview.value = List.of(poly);
+  }
+
+  void _up(PointerUpEvent e) {
+    if (_tool == _Tool.pan) return;
+    final tap = _downAt != null && (e.localPosition - _downAt!).distance < 6;
+    if (_dragEnd != null) {
+      _dragEnd = null;
+      _changed();
+      return;
+    }
+    if (_tool == _Tool.line) {
+      final pv = _preview.value;
+      _preview.value = null;
+      if (tap || pv == null || _dist(pv.first, pv.last) < 20 * _px()) {
+        _tapAt(e.localPosition);
+        return;
+      }
+      _lines.add([pv.first, pv.last]);
+      _selLine.value = null;
+      _changed();
+    }
+  }
+
+  void _finishPoly() {
+    final poly = _poly;
+    _poly = null;
+    _preview.value = null;
+    if (poly == null) return;
+    // Le dernier point suit la souris : on le retire, ainsi que les doublons.
+    final pts = <(double, double)>[];
+    for (final q in poly.take(poly.length - 1)) {
+      if (pts.isEmpty || _dist(pts.last, q) > 1) pts.add(q);
+    }
+    if (pts.length >= 2) {
+      _lines.add(pts);
+      _changed();
+    } else {
+      setState(() {});
+    }
+  }
+
+  /// Clic simple : choisir une ligne (pour la supprimer) ou un morceau.
+  void _tapAt(Offset pos) {
+    final p = _toPattern(pos, _canvasSize);
+    final tol = 10 * _px();
+    for (var i = _lines.length - 1; i >= 0; i--) {
+      if (_distToLine(p, _lines[i]) < tol) {
+        _selLine.value = i;
+        setState(() {});
+        return;
       }
     }
-    return [for (var i = 0; i < pts.length; i++) if (keep[i]) pts[i]];
+    _selLine.value = null;
+    _tapPiece(pos, _canvasSize);
+  }
+
+  void _deleteSelected() {
+    final i = _selLine.value;
+    if (i == null || i >= _lines.length) return;
+    _lines.removeAt(i);
+    _selLine.value = null;
+    _changed();
+  }
+
+  void _changed() {
+    setState(() => _pieceAnchors.clear());
+    _schedule();
   }
 
   void _undo() {
     if (_lines.isEmpty) return;
+    _selLine.value = null;
     setState(() {
       _lines.removeLast();
       _pieceAnchors.clear();
@@ -223,6 +346,7 @@ class _CutScreenState extends State<CutScreen> {
   }
 
   void _clear() {
+    _selLine.value = null;
     setState(() {
       _lines.clear();
       _pieceAnchors.clear();
@@ -289,38 +413,56 @@ class _CutScreenState extends State<CutScreen> {
   Widget _workspace() {
     return LayoutBuilder(builder: (ctx, c) {
       final size = Size(c.maxWidth, c.maxHeight);
-      final selPiece = (_res != null && _sel != null && _sel! <= _res!.pieces.length)
-          ? _res!.pieces[_sel! - 1]
-          : null;
+      if (size != _canvasSize) {
+        _canvasSize = size;
+        if (_res != null) WidgetsBinding.instance.addPostFrameCallback((_) => _rebuildPieces());
+      }
+      final r = _res;
+      final showSplit = _split && _pieces != null && r != null && r.pieces.length > 1;
       final canvas = SizedBox.fromSize(
         size: size,
         child: Stack(children: [
+          // Dessin : image déjà calculée (morceaux séparés) ou motif d'origine en cache.
           Positioned.fill(
-            child: RepaintBoundary(child: CustomPaint(painter: PatternPainter(_geo, realistic: false))),
+            child: RepaintBoundary(
+              child: showSplit
+                  ? CustomPaint(painter: _ImagePainter(_pieces!))
+                  : CustomPaint(painter: PatternPainter(_geo, realistic: false)),
+            ),
           ),
+          if (!showSplit && _zones != null)
+            Positioned.fill(
+              child: RepaintBoundary(child: CustomPaint(painter: _ZonesPainter(_b, r!, _zones!))),
+            ),
           Positioned.fill(
-            child: CustomPaint(
-              painter: _CutOverlay(
-                b: _b,
-                res: _res,
-                zones: _zones,
-                lines: _lines,
-                drawing: _drawing,
-                selected: selPiece,
-                hoopW: _hw * 10,
-                hoopH: _hh * 10,
-                zoom: _tc,
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: _LinesPainter(
+                  b: _b,
+                  lines: _lines,
+                  preview: _preview,
+                  selLine: _selLine,
+                  zoom: _tc,
+                  res: r,
+                  selected: _sel,
+                  hoopW: _hw * 10,
+                  hoopH: _hh * 10,
+                  split: showSplit,
+                  offsets: showSplit ? _offsets(r) : const {},
+                ),
               ),
             ),
           ),
           Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanStart: _drawMode ? (d) => _start(d.localPosition, size) : null,
-              onPanUpdate: _drawMode ? (d) => _move(d.localPosition, size) : null,
-              onPanEnd: _drawMode ? (_) => _end() : null,
-              onPanCancel: _drawMode ? _end : null,
-              onTapUp: (d) => _tapPiece(d.localPosition, size),
+            child: Listener(
+              behavior: _tool == _Tool.pan ? HitTestBehavior.translucent : HitTestBehavior.opaque,
+              onPointerDown: _down,
+              onPointerMove: (e) => _moveTo(e.localPosition),
+              onPointerHover: (e) {
+                if (_poly != null) _moveTo(e.localPosition);
+              },
+              onPointerUp: _up,
+              child: const SizedBox.expand(),
             ),
           ),
         ]),
@@ -329,11 +471,84 @@ class _CutScreenState extends State<CutScreen> {
         transformationController: _tc,
         minScale: 0.5,
         maxScale: 20,
-        panEnabled: !_drawMode,
-        scaleEnabled: !_drawMode,
+        panEnabled: _tool == _Tool.pan,
+        scaleEnabled: true,
         boundaryMargin: const EdgeInsets.all(400),
         child: canvas,
       );
+    });
+  }
+
+  /// Écart de chaque morceau dans la vue séparée (unités du dessin).
+  Map<int, Offset> _offsets(CutResult r) {
+    final cx = (_b.minX + _b.maxX) / 2, cy = (_b.minY + _b.maxY) / 2;
+    final gap = math.max(60.0, 0.05 * math.max(_b.width, _b.height));
+    return {
+      for (final p in r.pieces)
+        p.index: () {
+          final w = p.window;
+          final dx = (w.minX + w.maxX) / 2 - cx, dy = (w.minY + w.maxY) / 2 - cy;
+          double sgn(double d, int span) => d.abs() < span * 0.08 ? 0 : d.sign;
+          return Offset(sgn(dx, _b.width) * gap, sgn(dy, _b.height) * gap);
+        }(),
+    };
+  }
+
+  /// Dessine une fois les morceaux séparés (fils, cadres, numéros) dans une image.
+  Future<void> _rebuildPieces() async {
+    final r = _res;
+    final size = _canvasSize;
+    if (r == null || r.pieces.length < 2 || size.isEmpty) {
+      setState(() {
+        _pieces?.dispose();
+        _pieces = null;
+      });
+      return;
+    }
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final q = math.min(dpr * 2, 3072 / math.max(size.width, size.height));
+    final rec = ui.PictureRecorder();
+    final canvas = Canvas(rec)..scale(q);
+    final (k, cx, cy) = _base(size);
+    canvas.translate(cx, cy);
+    canvas.scale(k);
+    canvas.translate(-(_b.minX + _b.width / 2), -(_b.minY + _b.height / 2));
+    final offs = _offsets(r);
+    final line = Paint()
+      ..strokeWidth = 2.6
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < r.pieces.length; i++) {
+      final pc = r.pieces[i];
+      final o = offs[pc.index] ?? Offset.zero;
+      canvas.save();
+      canvas.translate(o.dx + pc.originX, o.dy + pc.originY);
+      final g = _geoCache.putIfAbsent(pc, () => PatternGeometry.from(pc.pattern));
+      for (var bl = 0; bl < g.points.length; bl++) {
+        line.color = g.colors[bl];
+        canvas.drawRawPoints(ui.PointMode.lines, g.points[bl], line);
+      }
+      // Cadre et contour du morceau, à la couleur de sa zone (rouge s'il dépasse).
+      final pb = pc.pattern.bounds;
+      final zc = _fits(pc) ? _zoneColors[i % _zoneColors.length] : AppColors.danger;
+      canvas.drawRect(
+        Rect.fromLTRB(pb.minX.toDouble(), pb.minY.toDouble(), pb.maxX.toDouble(), pb.maxY.toDouble()),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = (_frame ? 5 : 2.5) / k
+          ..color = zc.withValues(alpha: _frame ? 0.9 : 0.5),
+      );
+      canvas.restore();
+    }
+    final pic = rec.endRecording();
+    final img = await pic.toImage((size.width * q).ceil(), (size.height * q).ceil());
+    pic.dispose();
+    if (!mounted || r != _res) {
+      img.dispose();
+      return;
+    }
+    setState(() {
+      _pieces?.dispose();
+      _pieces = img;
     });
   }
 
@@ -382,10 +597,10 @@ class _CutScreenState extends State<CutScreen> {
   }
 
   Widget _toolbar() {
-    Widget btn(IconData i, String l, VoidCallback? f, {bool on = false}) => Padding(
+    Widget btn(IconData i, String l, VoidCallback? f, {bool on = false, Color? color}) => Padding(
           padding: const EdgeInsets.only(right: 8),
           child: Material(
-            color: on ? AppColors.gold : AppColors.surface2,
+            color: on ? AppColors.gold : (color ?? AppColors.surface2),
             borderRadius: BorderRadius.circular(22),
             child: InkWell(
               borderRadius: BorderRadius.circular(22),
@@ -393,24 +608,43 @@ class _CutScreenState extends State<CutScreen> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(i, size: 18, color: on ? Colors.black : AppColors.text),
+                  Icon(i, size: 18, color: on ? Colors.black : (f == null ? AppColors.muted : AppColors.text)),
                   const SizedBox(width: 6),
                   Text(l,
                       style: TextStyle(
-                          color: on ? Colors.black : AppColors.text, fontWeight: FontWeight.w600)),
+                          color: on ? Colors.black : (f == null ? AppColors.muted : AppColors.text),
+                          fontWeight: FontWeight.w600)),
                 ]),
               ),
             ),
           ),
         );
+    void tool(_Tool t) {
+      _finishPoly();
+      setState(() => _tool = t);
+    }
+
+    final multi = (_res?.pieces.length ?? 0) > 1;
     return SizedBox(
       height: 44,
       child: ListView(scrollDirection: Axis.horizontal, children: [
-        btn(Icons.draw, 'Tracer', () => setState(() => _drawMode = true), on: _drawMode),
-        btn(Icons.pan_tool_alt, 'Déplacer / zoom', () => setState(() => _drawMode = false), on: !_drawMode),
+        btn(Icons.horizontal_rule, 'Ligne droite', () => tool(_Tool.line), on: _tool == _Tool.line),
+        btn(Icons.timeline, 'Ligne brisée', () => tool(_Tool.polyline), on: _tool == _Tool.polyline),
+        if (_poly != null) btn(Icons.check, 'Terminer', _finishPoly, color: AppColors.goldDark),
+        btn(Icons.pan_tool_alt, 'Déplacer', () => tool(_Tool.pan), on: _tool == _Tool.pan),
+        ValueListenableBuilder<int?>(
+          valueListenable: _selLine,
+          builder: (_, v, __) => v == null
+              ? const SizedBox.shrink()
+              : btn(Icons.delete_outline, 'Supprimer la ligne', _deleteSelected, color: const Color(0x55F87171)),
+        ),
         btn(Icons.undo, 'Annuler', _lines.isEmpty ? null : _undo),
         btn(Icons.delete_sweep, 'Tout effacer', _lines.isEmpty ? null : _clear),
         btn(Icons.auto_fix_high, 'Proposer', _auto),
+        if (multi)
+          btn(_split ? Icons.grid_view : Icons.view_quilt_outlined, _split ? 'Morceaux séparés' : 'Dessin entier',
+              () => setState(() => _split = !_split),
+              on: _split),
         btn(Icons.center_focus_strong, 'Recentrer', () => _tc.value = Matrix4.identity()),
       ]),
     );
@@ -615,29 +849,75 @@ class _CutScreenState extends State<CutScreen> {
   }
 }
 
-/// Zones colorées, lignes tracées, trait en cours, cadre de la machine
-/// autour du morceau choisi (même cadrage que PatternPainter).
-class _CutOverlay extends CustomPainter {
-  final Bounds b;
-  final CutResult? res;
-  final ui.Image? zones;
-  final List<List<(double, double)>> lines;
-  final List<(double, double)>? drawing;
-  final PrepPiece? selected;
-  final double hoopW, hoopH;
-  final TransformationController zoom;
+enum _Tool { line, polyline, pan }
 
-  _CutOverlay({
+/// Image déjà prête (morceaux séparés).
+class _ImagePainter extends CustomPainter {
+  final ui.Image img;
+  _ImagePainter(this.img);
+  @override
+  void paint(Canvas canvas, Size s) {
+    canvas.drawImageRect(img, Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+        Offset.zero & s, Paint()..filterQuality = FilterQuality.medium);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ImagePainter o) => o.img != img;
+}
+
+/// Zones colorées (une couleur par morceau, rouge s'il dépasse le cadre).
+class _ZonesPainter extends CustomPainter {
+  final Bounds b;
+  final CutResult r;
+  final ui.Image zones;
+  _ZonesPainter(this.b, this.r, this.zones);
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final w = math.max(b.width, 10).toDouble(), h = math.max(b.height, 10).toDouble();
+    final k = math.min(s.width / w, s.height / h) * 0.86;
+    canvas.translate(s.width / 2, s.height / 2);
+    canvas.scale(k);
+    canvas.translate(-(b.minX + b.width / 2), -(b.minY + b.height / 2));
+    canvas.drawImageRect(
+      zones,
+      Rect.fromLTWH(0, 0, r.gw.toDouble(), r.gh.toDouble()),
+      Rect.fromLTWH(r.gx0.toDouble(), r.gy0.toDouble(), r.gw * r.res.toDouble(), r.gh * r.res.toDouble()),
+      Paint()..filterQuality = FilterQuality.low,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ZonesPainter o) => o.zones != zones;
+}
+
+/// Calque léger : lignes de coupe, trait en cours, ligne choisie, numéros,
+/// cadre de la machine autour du morceau choisi. Seul ce calque suit la souris.
+class _LinesPainter extends CustomPainter {
+  final Bounds b;
+  final List<List<(double, double)>> lines;
+  final ValueNotifier<List<(double, double)>?> preview;
+  final ValueNotifier<int?> selLine;
+  final TransformationController zoom;
+  final CutResult? res;
+  final int? selected;
+  final double hoopW, hoopH;
+  final bool split;
+  final Map<int, Offset> offsets;
+
+  _LinesPainter({
     required this.b,
-    required this.res,
-    required this.zones,
     required this.lines,
-    required this.drawing,
+    required this.preview,
+    required this.selLine,
+    required this.zoom,
+    required this.res,
     required this.selected,
     required this.hoopW,
     required this.hoopH,
-    required this.zoom,
-  }) : super(repaint: zoom);
+    required this.split,
+    required this.offsets,
+  }) : super(repaint: Listenable.merge([preview, selLine, zoom]));
 
   @override
   void paint(Canvas canvas, Size s) {
@@ -648,31 +928,7 @@ class _CutOverlay extends CustomPainter {
     canvas.translate(s.width / 2, s.height / 2);
     canvas.scale(k);
     canvas.translate(-(b.minX + b.width / 2), -(b.minY + b.height / 2));
-    final px = 1 / (k * z); // un pixel écran en unités du dessin
-
-    final r = res;
-    if (zones != null && r != null) {
-      canvas.drawImageRect(
-        zones!,
-        Rect.fromLTWH(0, 0, r.gw.toDouble(), r.gh.toDouble()),
-        Rect.fromLTWH(r.gx0.toDouble(), r.gy0.toDouble(), r.gw * r.res.toDouble(), r.gh * r.res.toDouble()),
-        Paint()..filterQuality = FilterQuality.none,
-      );
-    }
-
-    // Cadre de la machine centré sur le morceau choisi.
-    final sp = selected;
-    if (sp != null) {
-      final wb = sp.window;
-      final c = Offset((wb.minX + wb.maxX) / 2, (wb.minY + wb.maxY) / 2);
-      canvas.drawRect(
-        Rect.fromCenter(center: c, width: hoopW, height: hoopH),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2 * px
-          ..color = AppColors.goldLight,
-      );
-    }
+    final px = 1 / (k * z);
 
     void path(List<(double, double)> pts, Color col, double width) {
       if (pts.length < 2) return;
@@ -680,39 +936,48 @@ class _CutOverlay extends CustomPainter {
       for (final q in pts.skip(1)) {
         p.lineTo(q.$1, q.$2);
       }
-      canvas.drawPath(
-          p,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = (width + 2.5) * px
-            ..strokeJoin = StrokeJoin.round
-            ..strokeCap = StrokeCap.round
-            ..color = Colors.black54);
-      canvas.drawPath(
-          p,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = width * px
-            ..strokeJoin = StrokeJoin.round
-            ..strokeCap = StrokeCap.round
-            ..color = col);
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round;
+      canvas.drawPath(p, paint..strokeWidth = (width + 3) * px..color = Colors.black54);
+      canvas.drawPath(p, paint..strokeWidth = width * px..color = col);
+      // Poignées aux extrémités.
+      final dot = Paint()..color = col;
+      canvas.drawCircle(Offset(pts.first.$1, pts.first.$2), 4.5 * px, dot);
+      canvas.drawCircle(Offset(pts.last.$1, pts.last.$2), 4.5 * px, dot);
     }
 
-    for (final l in lines) {
-      path(l, AppColors.danger, 2.5);
+    final sl = selLine.value;
+    for (var i = 0; i < lines.length; i++) {
+      path(lines[i], i == sl ? AppColors.goldLight : AppColors.danger.withValues(alpha: split ? 0.55 : 1),
+          i == sl ? 3.5 : 2.5);
     }
-    if (drawing != null) path(drawing!, AppColors.goldLight, 2.5);
+    final pv = preview.value;
+    if (pv != null) path(pv, AppColors.goldLight, 2.5);
 
-    // Numéros des morceaux.
-    if (r != null) {
-      for (var i = 0; i < r.pieces.length; i++) {
-        final wb = r.pieces[i].window;
-        final c = Offset((wb.minX + wb.maxX) / 2, (wb.minY + wb.maxY) / 2);
-        final rad = 13 * px;
-        canvas.drawCircle(c, rad, Paint()..color = AppColors.gold);
+    final r = res;
+    if (r != null && r.pieces.length > 1) {
+      for (final pc in r.pieces) {
+        final wb = pc.window;
+        final c = Offset((wb.minX + wb.maxX) / 2, (wb.minY + wb.maxY) / 2) + (offsets[pc.index] ?? Offset.zero);
+        if (pc.index == selected) {
+          // Cadre de la machine centré sur le morceau choisi.
+          final pb = pc.pattern.bounds;
+          final o = (offsets[pc.index] ?? Offset.zero) + Offset(pc.originX.toDouble(), pc.originY.toDouble());
+          final pc0 = Offset((pb.minX + pb.maxX) / 2, (pb.minY + pb.maxY) / 2) + o;
+          canvas.drawRect(
+            Rect.fromCenter(center: pc0, width: hoopW, height: hoopH),
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2 * px
+              ..color = AppColors.goldLight,
+          );
+        }
+        canvas.drawCircle(c, 13 * px, Paint()..color = AppColors.gold);
         final tp = TextPainter(
           text: TextSpan(
-              text: '${r.pieces[i].index}',
+              text: '${pc.index}',
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 14 * px)),
           textDirection: TextDirection.ltr,
         )..layout();
@@ -723,7 +988,7 @@ class _CutOverlay extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _CutOverlay o) => true;
+  bool shouldRepaint(covariant _LinesPainter o) => true;
 }
 
 /// Règle graduée en cm (zéro au bord du dessin), suit le zoom et le déplacement.

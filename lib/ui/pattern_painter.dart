@@ -184,9 +184,46 @@ class PatternPainter extends CustomPainter {
     this.showJumps = false,
   }) : super(repaint: progress);
 
+  /// Image déjà dessinée du motif complet, par géométrie : zoomer, déplacer
+  /// ou reconstruire l'écran ne redessine plus des centaines de milliers de
+  /// points, on affiche simplement l'image.
+  static final Expando<_RasterCache> _cache = Expando<_RasterCache>();
+
   @override
   void paint(Canvas canvas, Size size) {
     final prog = progress?.value ?? fixedProgress ?? g.total - 1;
+    final full = prog >= g.total - 1 && !showNeedle;
+    if (full && size.width >= 1 && size.height >= 1) {
+      final key = '${size.width.round()}x${size.height.round()}/$realistic/$showJumps/$showStartEnd';
+      var c = _cache[g];
+      if (c == null || c.key != key) {
+        final dpr = ui.PlatformDispatcher.instance.implicitView?.devicePixelRatio ?? 1.0;
+        // Résolution doublée pour rester net au zoom, plafonnée (mémoire).
+        final q = math.min(dpr * 2, 3072 / math.max(size.width, size.height));
+        final rec = ui.PictureRecorder();
+        final cc = Canvas(rec);
+        cc.scale(q);
+        _paintAll(cc, size, prog, realistic);
+        final pic = rec.endRecording();
+        final img = pic.toImageSync((size.width * q).ceil(), (size.height * q).ceil());
+        pic.dispose();
+        c?.image.dispose();
+        c = _RasterCache(key, img);
+        _cache[g] = c;
+      }
+      canvas.drawImageRect(
+        c.image,
+        Rect.fromLTWH(0, 0, c.image.width.toDouble(), c.image.height.toDouble()),
+        Offset.zero & size,
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+      return;
+    }
+    // Simulation en cours : rendu simple (une passe au lieu de neuf), fluide.
+    _paintAll(canvas, size, prog, realistic && !showNeedle);
+  }
+
+  void _paintAll(Canvas canvas, Size size, int prog, bool realistic) {
     final b = g.bounds;
     final w = math.max(b.width, 10).toDouble();
     final h = math.max(b.height, 10).toDouble();
@@ -326,4 +363,10 @@ class PatternPainter extends CustomPainter {
       old.realistic != realistic ||
       old.showStartEnd != showStartEnd ||
       old.showJumps != showJumps;
+}
+
+class _RasterCache {
+  final String key;
+  final ui.Image image;
+  _RasterCache(this.key, this.image);
 }

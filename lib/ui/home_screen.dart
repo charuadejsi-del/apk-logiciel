@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import '../core/demo.dart';
 import '../core/formats.dart';
 import '../core/pattern.dart';
+import 'cut_screen.dart';
+import 'frame_screen.dart';
 import 'image_import_screen.dart';
 import 'text_editor_screen.dart';
 import 'theme.dart';
@@ -24,7 +26,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   bool _busy = false;
   late final AnimationController _ring =
-      AnimationController(vsync: this, duration: const Duration(seconds: 8))..repeat();
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..forward(); // une fois : pas d'animation permanente
 
   @override
   void dispose() {
@@ -32,11 +34,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
-  Future<void> _pickFile() async {
+  /// Choisit un fichier et le lit en arrière-plan.
+  Future<(EmbPattern, Uint8List, String)?> _pick() async {
     setState(() => _busy = true);
     try {
       final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
-      if (res == null || res.files.isEmpty) return;
+      if (res == null || res.files.isEmpty) return null;
       final f = res.files.single;
       Uint8List? bytes = f.bytes;
       if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
@@ -45,29 +48,37 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final p = await compute(_load, (bytes, f.name));
       final dot = f.name.lastIndexOf('.');
       final ext = dot >= 0 ? f.name.substring(dot + 1).toLowerCase() : '';
-      if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => ViewerScreen(pattern: p, sourceBytes: bytes, sourceFormat: ext),
-      ));
+      return (p, bytes, ext);
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e is FormatException ? e.message : 'Erreur : $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e is FormatException ? e.message : 'Erreur : $e')),
+        );
+      }
+      return null;
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  Future<void> _pickFile() => _openTool(null);
+
+  /// Ouvre un fichier puis l'outil demandé (ou l'atelier).
+  Future<void> _openTool(String? tool) async {
+    final r = await _pick();
+    if (r == null || !mounted) return;
+    final (p, bytes, ext) = r;
+    final Widget screen = switch (tool) {
+      'cut' => CutScreen(pattern: p),
+      'frame' => FrameScreen(pattern: p),
+      _ => ViewerScreen(pattern: p, sourceBytes: bytes, sourceFormat: ext, startTool: tool),
+    };
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
   void _openDemo() {
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => ViewerScreen(pattern: demoPattern())));
-  }
-
-  void _soon(String what) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$what arrive dans la prochaine version.')),
-    );
   }
 
   Widget _logo() {
@@ -140,7 +151,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           SafeArea(
             child: Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 480),
+                constraints: const BoxConstraints(maxWidth: 760),
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(22, 36, 22, 24),
                   children: [
@@ -178,29 +189,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         textAlign: TextAlign.center,
                         style: TextStyle(color: AppColors.muted, fontSize: 12)),
                     const SizedBox(height: 26),
-                    GridView.count(
-                      crossAxisCount: 2,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: 1.35,
-                      children: [
-                        _tile(Icons.auto_awesome, 'Démonstration',
-                            'Voir un motif complet', _openDemo),
-                        _tile(Icons.text_fields, 'Texte brodé', 'Noms en point satin',
+                    LayoutBuilder(builder: (ctx, c) {
+                      final tiles = [
+                        _tile(Icons.content_cut, 'Couper le dessin', 'قطع الرشمة · petits cadres',
+                            () => _openTool('cut')),
+                        _tile(Icons.text_fields, 'Écrire un nom', 'كتابة اسم · point satin',
                             () => Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const TextEditorScreen()))),
-                        _tile(Icons.image_outlined, 'Image → broderie', 'Dessin noir et blanc',
+                        _tile(Icons.crop_free, 'Cadre du dessin', 'كادر للرشمة · point droit',
+                            () => _openTool('frame')),
+                        _tile(Icons.image_outlined, 'Image → broderie', 'تحويل صورة إلى طرز',
                             () => Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const ImageImportScreen()))),
-                        _tile(Icons.calculate_outlined, 'Calcul du prix',
-                            'Prix au point', () => _soon('Le calcul du prix'),
-                            soon: true),
-                      ],
-                    ),
+                        _tile(Icons.cleaning_services_outlined, 'Petits points', 'نزع النقاط الزائدة',
+                            () => _openTool('small')),
+                        _tile(Icons.auto_awesome, 'Démonstration', 'Voir un motif complet', _openDemo),
+                      ];
+                      return GridView.count(
+                        crossAxisCount: c.maxWidth >= 700 ? 3 : 2,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: 1.35,
+                        children: tiles,
+                      );
+                    }),
                     const SizedBox(height: 28),
-                    const Text('Version 0.2 · texte brodé, taille, densité, départ',
+                    const Text('Version 0.3 · découpe, cadre, texte, image, petits points',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Color(0xFF5C5A55), fontSize: 11)),
                   ],

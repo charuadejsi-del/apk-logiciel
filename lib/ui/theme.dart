@@ -88,9 +88,6 @@ class LuxCard extends StatelessWidget {
         borderRadius: r,
         border: Border.all(
             color: highlighted ? const Color(0x00000000) : AppColors.border),
-        boxShadow: const [
-          BoxShadow(color: Color(0x66000000), blurRadius: 18, offset: Offset(0, 8)),
-        ],
       ),
       child: Material(
         type: MaterialType.transparency,

@@ -82,8 +82,14 @@ class _FrameScreenState extends State<FrameScreen> {
             Positioned.fill(
               child: InteractiveViewer(
                 maxScale: 12,
-                child: RepaintBoundary(
-                    child: CustomPaint(painter: PatternPainter(_geo!, showStartEnd: true), size: Size.infinite)),
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: RepaintBoundary(
+                        child: CustomPaint(painter: PatternPainter(_geo!, showStartEnd: true))),
+                  ),
+                  // Le cadre, bien visible (il est cousu en premier, en point droit).
+                  Positioned.fill(child: CustomPaint(painter: _FrameOutline(_geo!.bounds))),
+                ]),
               ),
             ),
           if (_busy) const Center(child: CircularProgressIndicator(color: AppColors.gold)),
@@ -133,4 +139,24 @@ class _FrameScreenState extends State<FrameScreen> {
       ),
     );
   }
+}
+
+class _FrameOutline extends CustomPainter {
+  final Bounds b;
+  _FrameOutline(this.b);
+  @override
+  void paint(Canvas canvas, Size s) {
+    final w = b.width < 10 ? 10.0 : b.width.toDouble(), h = b.height < 10 ? 10.0 : b.height.toDouble();
+    final k = (s.width / w < s.height / h ? s.width / w : s.height / h) * 0.86;
+    final r = Rect.fromCenter(center: s.center(Offset.zero), width: b.width * k, height: b.height * k);
+    canvas.drawRect(
+        r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = AppColors.goldLight.withValues(alpha: 0.8));
+  }
+
+  @override
+  bool shouldRepaint(covariant _FrameOutline o) => o.b != b;
 }
