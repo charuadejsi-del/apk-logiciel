@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../core/dst.dart';
 import '../core/pattern.dart';
+import '../core/pes.dart';
 import 'theme.dart';
 
 /// Nom compatible avec les machines (8 caractères maximum, extension en majuscules).
@@ -33,8 +34,9 @@ class ExportSheet extends StatefulWidget {
 }
 
 class _ExportSheetState extends State<ExportSheet> {
-  late final Uint8List _bytes;
-  late final String _fileName;
+  late Uint8List _bytes;
+  late String _fileName;
+  String _fmt = 'dst';
   String? _error;
   int _checked = 0;
   bool _busy = false;
@@ -44,11 +46,16 @@ class _ExportSheetState extends State<ExportSheet> {
   @override
   void initState() {
     super.initState();
-    _fileName = machineFileName(widget.pattern.name, 'dst');
-    _bytes = widget.originalDst ?? writeDst(widget.pattern);
+    _prepare();
+  }
+
+  void _prepare() {
+    _error = null;
+    _fileName = machineFileName(widget.pattern.name, _fmt);
+    _bytes = _fmt == 'pes' ? writePes(widget.pattern) : (widget.originalDst ?? writeDst(widget.pattern));
     try {
       // Contrôle : on relit le fichier produit et on compare le nombre de points.
-      final back = readDst(_bytes);
+      final back = _fmt == 'pes' ? readPes(_bytes) : readDst(_bytes);
       _checked = back.stitchCount;
       if (_checked != widget.pattern.stitchCount) {
         _error = 'Contrôle échoué : ${widget.pattern.stitchCount} points attendus, '
@@ -85,17 +92,17 @@ class _ExportSheetState extends State<ExportSheet> {
     setState(() => _busy = true);
     try {
       final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'Enregistrer le fichier DST',
+        dialogTitle: 'Enregistrer le fichier ${_fmt.toUpperCase()}',
         fileName: _fileName,
         type: FileType.custom,
-        allowedExtensions: const ['dst'],
+        allowedExtensions: [_fmt],
         bytes: _bytes,
       );
       if (path == null) return;
-      final hasExt = path.toLowerCase().endsWith('.dst');
+      final hasExt = path.toLowerCase().endsWith('.$_fmt');
       if (!_mobile) {
         // Sur ordinateur, on écrit nous-mêmes : on force l'extension .DST.
-        final target = hasExt ? path : '$path.DST';
+        final target = hasExt ? path : '$path.${_fmt.toUpperCase()}';
         await File(target).writeAsBytes(_bytes, flush: true);
         final size = await File(target).length();
         _done(size == _bytes.length
@@ -121,10 +128,10 @@ class _ExportSheetState extends State<ExportSheet> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
         icon: const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 36),
-        title: const Text('Extension .DST manquante'),
+        title: Text('Extension .${_fmt.toUpperCase()} manquante'),
         content: Text(
-          'Le fichier a été enregistré sous le nom « $name », sans « .DST » à la fin.\n\n'
-          'La machine et Wilcom ne le reconnaîtront pas. Renommez-le en « $name.DST », '
+          'Le fichier a été enregistré sous le nom « $name », sans « .${_fmt.toUpperCase()} » à la fin.\n\n'
+          'La machine et Wilcom ne le reconnaîtront pas. Renommez-le en « $name.${_fmt.toUpperCase()} », '
           'ou utilisez le bouton « Envoyer », qui garde toujours le bon nom.',
         ),
         actions: [
@@ -139,8 +146,15 @@ class _ExportSheetState extends State<ExportSheet> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Widget _formatTile(String code, String brand, {bool active = false}) {
+  Widget _formatTile(String code, String brand, {bool active = false, bool available = true}) {
     return Expanded(
+      child: GestureDetector(
+        onTap: available && !active
+            ? () => setState(() {
+                  _fmt = code.toLowerCase();
+                  _prepare();
+                })
+            : null,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 4),
         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -156,16 +170,17 @@ class _ExportSheetState extends State<ExportSheet> {
                 style: TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
-                  color: active ? Colors.black : AppColors.muted,
+                  color: active ? Colors.black : (available ? AppColors.text : AppColors.muted),
                 )),
             const SizedBox(height: 2),
-            Text(active ? brand : 'Bientôt',
+            Text(available ? brand : 'Bientôt',
                 style: TextStyle(
                   fontSize: 11,
                   color: active ? Colors.black87 : AppColors.muted,
                 )),
           ],
         ),
+      ),
       ),
     );
   }
@@ -187,9 +202,9 @@ class _ExportSheetState extends State<ExportSheet> {
                 style: TextStyle(color: AppColors.muted)),
             const SizedBox(height: 16),
             Row(children: [
-              _formatTile('DST', 'Tajima', active: true),
-              _formatTile('PES', 'Brother'),
-              _formatTile('JEF', 'Janome'),
+              _formatTile('DST', 'Tajima', active: _fmt == 'dst'),
+              _formatTile('PES', 'Brother', active: _fmt == 'pes'),
+              _formatTile('JEF', 'Janome', active: false, available: false),
             ]),
             const SizedBox(height: 16),
             LuxCard(
@@ -232,7 +247,7 @@ class _ExportSheetState extends State<ExportSheet> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Recommandé : garde toujours le nom avec « .DST ».',
+                'Recommandé : garde toujours l\'extension (.DST / .PES).',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
@@ -252,7 +267,7 @@ class _ExportSheetState extends State<ExportSheet> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Si vous changez le nom, gardez « .DST » à la fin.',
+                'Si vous changez le nom, gardez l\'extension à la fin.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),

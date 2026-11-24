@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'pattern.dart';
@@ -121,3 +122,120 @@ const List<int> pecPalette = [
   0xFF00673E, 0xFF4E2990, 0xFF2F7E20, 0xFFFFCCCC, 0xFFFFD911, 0xFF095BA6,
   0xFFF0F970, 0xFFE3F35B, 0xFFFF9900, 0xFFFFF08D, 0xFFFFC8C8,
 ];
+
+// ───────────────────────── Écriture PES (Brother) ─────────────────────────
+
+/// Fil le plus proche dans la palette Brother.
+int nearestPecIndex(int argb) {
+  final r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+  var best = 1, bestD = 1 << 30;
+  for (var i = 1; i < pecPalette.length; i++) {
+    final c = pecPalette[i];
+    final dr = r - ((c >> 16) & 0xFF), dg = g - ((c >> 8) & 0xFF), db = b - (c & 0xFF);
+    // Distance pondérée (l'œil est plus sensible au vert).
+    final d = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/// Fichier PES (version 1 courte) : en-tête PES puis bloc PEC, que lisent les
+/// machines Brother. Unités 0,1 mm, Y vers le bas.
+Uint8List writePes(EmbPattern pattern) {
+  final out = BytesBuilder();
+  out.add('#PES0001'.codeUnits);
+  out.add(const [0x16, 0x00, 0x00, 0x00]); // le bloc PEC commence à l'octet 22
+  out.add(List<int>.filled(10, 0));
+  out.add(_pecBlock(pattern));
+  return out.toBytes();
+}
+
+Uint8List _pecBlock(EmbPattern p) {
+  final h = BytesBuilder();
+  var label = p.name.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9 _-]'), '');
+  if (label.length > 8) label = label.substring(0, 8);
+  h.add('LA:${label.padRight(16)}\r'.codeUnits);
+  h.add(List<int>.filled(12, 0x20));
+  h.add(const [0xFF, 0x00]);
+  h.add(const [6, 38]); // icône 48 × 38 points
+  h.add(const [0x20, 0x20, 0x20, 0x20, 0x64, 0x20, 0x00, 0x20, 0x00, 0x20, 0x20, 0x20]);
+  final n = p.colorBlockCount;
+  h.add([n - 1]);
+  for (var i = 0; i < n; i++) {
+    h.add([nearestPecIndex(p.colorOfBlock(i))]);
+  }
+  h.add(List<int>.filled(463 - n, 0x20));
+  final header = h.toBytes();
+  assert(header.length == 512);
+
+  final st = _pecStitches(p);
+  final b = p.bounds;
+  final blockLen = 16 + st.length;
+  final blk = BytesBuilder()
+    ..add(const [0x00, 0x00])
+    ..add([blockLen & 0xFF, (blockLen >> 8) & 0xFF, (blockLen >> 16) & 0xFF])
+    ..add(const [0x31, 0xFF, 0xF0])
+    ..add(_i16(b.width))
+    ..add(_i16(b.height))
+    ..add(_i16(0x1E0))
+    ..add(_i16(0x1B0))
+    ..add(st);
+  // Icônes (vue d'ensemble + une par couleur) : laissées vides.
+  final icons = List<int>.filled(228 * (n + 1), 0);
+  return (BytesBuilder()
+        ..add(header)
+        ..add(blk.toBytes())
+        ..add(icons))
+      .toBytes();
+}
+
+List<int> _i16(int v) => [v & 0xFF, (v >> 8) & 0xFF];
+
+Uint8List _pecStitches(EmbPattern p) {
+  final o = BytesBuilder();
+  var x = 0, y = 0;
+  var colorTwo = true;
+  void long(int dx, int dy, int flag) {
+    final a = (dx & 0x0FFF) | 0x8000 | flag, c = (dy & 0x0FFF) | 0x8000 | flag;
+    o.add([(a >> 8) & 0xFF, a & 0xFF, (c >> 8) & 0xFF, c & 0xFF]);
+  }
+
+  void move(int tx, int ty, int flag) {
+    // Déplacements de plus de 204,7 mm : découpés.
+    while (true) {
+      final dx = tx - x, dy = ty - y;
+      final steps = math.max(1, (math.max(dx.abs(), dy.abs()) / 2000).ceil());
+      final sx = (dx / steps).round(), sy = (dy / steps).round();
+      if (flag == 0 && steps == 1 && sx >= -64 && sx <= 63 && sy >= -64 && sy <= 63) {
+        o.add([sx & 0x7F, sy & 0x7F]);
+      } else {
+        long(sx, sy, steps > 1 && flag == 0 ? 0x10 : flag);
+      }
+      x += sx;
+      y += sy;
+      if (steps == 1) return;
+    }
+  }
+
+  for (final s in p.stitches) {
+    switch (s.type) {
+      case StitchType.stitch:
+        move(s.x, s.y, 0);
+      case StitchType.jump:
+        if (s.x != x || s.y != y) move(s.x, s.y, 0x10);
+      case StitchType.trim:
+        move(s.x, s.y, 0x20); // coupe (déplacement nul si déjà sur place)
+      case StitchType.colorChange:
+        if (s.x != x || s.y != y) move(s.x, s.y, 0x10);
+        o.add([0xFE, 0xB0, colorTwo ? 2 : 1]);
+        colorTwo = !colorTwo;
+      case StitchType.end:
+        break;
+    }
+  }
+  o.add(const [0xFF, 0x00]);
+  return o.toBytes();
+}

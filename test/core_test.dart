@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:broderie/core/demo.dart';
+import 'package:broderie/core/density.dart';
 import 'package:broderie/core/dst.dart';
 import 'package:broderie/core/edits.dart';
 import 'package:broderie/core/pattern.dart';
@@ -465,5 +466,63 @@ void main() {
     }
     // Sans ligne : un seul morceau.
     expect(cutByLines(p, const [], o).pieces.length, 1);
+  });
+
+  test('PES : écrit puis relu à l\'identique (points, couleurs, coupes)', () {
+    final p = demoPattern();
+    final back = readPes(writePes(p));
+    expect(back.stitchCount, p.stitchCount);
+    expect(back.colorChangeCount, p.colorChangeCount);
+    expect(back.bounds.width, p.bounds.width);
+    final big = EmbPattern(name: 'LOIN', stitches: const [
+      Stitch(0, 0, StitchType.jump),
+      Stitch(0, 0, StitchType.stitch),
+      Stitch(30, 30, StitchType.stitch),
+      Stitch(30, 30, StitchType.trim),
+      Stitch(2500, 900, StitchType.jump),
+      Stitch(2500, 900, StitchType.stitch),
+      Stitch(2700, 900, StitchType.stitch),
+      Stitch(2700, 900, StitchType.end),
+    ]);
+    final b2 = readPes(writePes(big));
+    expect(b2.stitchCount, big.stitchCount);
+    expect(b2.trimCount, 1);
+    final last = b2.stitches.lastWhere((s) => s.isStitch);
+    expect((last.x, last.y), (2700, 900));
+  });
+
+  test('densité par nombre de points : satin et tatami, plus et moins', () {
+    // Satin : zigzag de 4 mm de large, pas de 0,4 mm.
+    final sat = <Stitch>[const Stitch(0, 0, StitchType.jump)];
+    for (var k = 0; k < 400; k++) {
+      sat.add(Stitch(k.isEven ? 0 : 40, k * 4, StitchType.stitch));
+    }
+    // Tatami : rangées de 30 mm (points de 3,5 mm), écart 0,4 mm.
+    final tat = <Stitch>[const Stitch(1000, 0, StitchType.jump)];
+    for (var row = 0; row < 150; row++) {
+      final fwd = row.isEven;
+      for (var k = 0; k <= 8; k++) {
+        final x = fwd ? 1000 + k * 37 : 1000 + 296 - k * 37;
+        tat.add(Stitch(x, row * 4, StitchType.stitch));
+      }
+    }
+    for (final st in [sat, tat]) {
+      final p = EmbPattern(name: 'D', stitches: [...st, Stitch(st.last.x, st.last.y, StitchType.end)]);
+      final n = p.stitchCount;
+      final up = adjustStitchCount(p, (n * 1.4).round());
+      expect((up.achieved - n * 1.4).abs() / (n * 1.4), lessThan(0.04), reason: 'plus');
+      final down = adjustStitchCount(p, (n * 0.8).round());
+      expect((down.achieved - n * 0.8).abs() / (n * 0.8), lessThan(0.05), reason: 'moins');
+      // Rien ne sort de la forme d'origine.
+      final b = p.bounds, bu = up.pattern.bounds;
+      expect(bu.minX >= b.minX && bu.maxX <= b.maxX && bu.minY >= b.minY && bu.maxY <= b.maxY, isTrue);
+      // Points de longueur raisonnable (pas de point géant créé).
+      final s2 = up.pattern.stitches;
+      for (var i = 1; i < s2.length; i++) {
+        if (s2[i].isStitch && s2[i - 1].isStitch) {
+          expect(distance(s2[i - 1], s2[i]), lessThan(60));
+        }
+      }
+    }
   });
 }

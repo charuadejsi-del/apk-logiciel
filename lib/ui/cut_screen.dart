@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -6,11 +8,13 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/hoop.dart';
 import '../core/pattern.dart';
 import '../core/transform.dart';
 import 'pattern_painter.dart';
+import 'piece_screen.dart';
 import 'pieces_panel.dart';
 import 'theme.dart';
 
@@ -41,10 +45,8 @@ class _CutScreenState extends State<CutScreen> {
   double _cw = 180, _ch = 280;
   double _overlap = 2.5;
   bool _marks = true;
-  bool _frame = true;
-  double _margin = 5;
-  StartAnchor _anchor = StartAnchor.center;
-  final Map<int, StartAnchor> _pieceAnchors = {};
+  int _step = 0; // 0 : cadre de la machine · 1 : coupe · 2 : morceaux
+  final Set<int> _saved = {}; // morceaux déjà enregistrés
 
   final List<List<(double, double)>> _lines = [];
   _Tool _tool = _Tool.line;
@@ -74,6 +76,7 @@ class _CutScreenState extends State<CutScreen> {
   void initState() {
     super.initState();
     _run();
+    _restore();
   }
 
   @override
@@ -90,15 +93,13 @@ class _CutScreenState extends State<CutScreen> {
   PrepOptions get _opts => PrepOptions(
         hoopWmm: _hw,
         hoopHmm: _hh,
-        frame: _frame,
-        marginMm: _margin,
+        frame: false, // le cadre se choisit ensuite, morceau par morceau
         overlapMm: _overlap,
         marks: _marks,
-        anchor: _anchor,
-        pieceAnchors: Map.of(_pieceAnchors),
       );
 
   void _schedule() {
+    _persist();
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 120), _run);
   }
@@ -199,7 +200,8 @@ class _CutScreenState extends State<CutScreen> {
   }
 
   void _down(PointerDownEvent e) {
-    if (_tool == _Tool.pan) return;
+    _downAt = e.localPosition;
+    if (_tool == _Tool.pan || _step != 1) return;
     if (e.buttons == kSecondaryMouseButton) {
       _finishPoly();
       return;
@@ -269,8 +271,13 @@ class _CutScreenState extends State<CutScreen> {
   }
 
   void _up(PointerUpEvent e) {
-    if (_tool == _Tool.pan) return;
     final tap = _downAt != null && (e.localPosition - _downAt!).distance < 6;
+    if (_step == 2 && tap) {
+      final i = _pieceAt(e.localPosition, _canvasSize);
+      if (i != null) _openPiece(i);
+      return;
+    }
+    if (_tool == _Tool.pan || _step != 1) return;
     if (_dragEnd != null) {
       _dragEnd = null;
       _changed();
@@ -331,8 +338,174 @@ class _CutScreenState extends State<CutScreen> {
   }
 
   void _changed() {
-    setState(() => _pieceAnchors.clear());
+    setState(() => _saved.clear());
     _schedule();
+  }
+
+  // ───────────── Projet enregistré automatiquement ─────────────
+
+  Future<File> _projectFile() async {
+    final dir = await getApplicationSupportDirectory();
+    final id = '${widget.pattern.name}_${widget.pattern.stitchCount}_${_b.width}x${_b.height}'
+        .replaceAll(RegExp(r'[^A-Za-z0-9_x]'), '');
+    return File('${dir.path}${Platform.pathSeparator}coupe_$id.json');
+  }
+
+  Future<void> _persist() async {
+    try {
+      final f = await _projectFile();
+      await f.writeAsString(jsonEncode({
+        'hoop': _custom ? null : hoopPresets.indexOf(_hoop),
+        'cw': _cw,
+        'ch': _ch,
+        'overlap': _overlap,
+        'marks': _marks,
+        'lines': [
+          for (final l in _lines) [for (final p in l) [p.$1, p.$2]]
+        ],
+        'saved': _saved.toList(),
+      }));
+    } catch (_) {
+      // Sans importance : le projet n'est simplement pas mémorisé.
+    }
+  }
+
+  Future<void> _restore() async {
+    try {
+      final f = await _projectFile();
+      if (!await f.exists()) return;
+      final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final lines = [
+        for (final l in (m['lines'] as List<dynamic>))
+          [
+            for (final p in (l as List<dynamic>))
+              (((p as List<dynamic>)[0] as num).toDouble(), (p[1] as num).toDouble())
+          ]
+      ];
+      if (!mounted) return;
+      final hi = m['hoop'] as int?;
+      setState(() {
+        if (hi != null && hi >= 0 && hi < hoopPresets.length) {
+          _hoop = hoopPresets[hi];
+          _custom = false;
+        } else {
+          _custom = true;
+        }
+        _cw = (m['cw'] as num?)?.toDouble() ?? _cw;
+        _ch = (m['ch'] as num?)?.toDouble() ?? _ch;
+        _overlap = (m['overlap'] as num?)?.toDouble() ?? _overlap;
+        _marks = m['marks'] as bool? ?? _marks;
+        _lines
+          ..clear()
+          ..addAll(lines);
+        _saved
+          ..clear()
+          ..addAll([for (final x in (m['saved'] as List<dynamic>? ?? const [])) x as int]);
+        if (lines.isNotEmpty) _step = 1;
+      });
+      if (lines.isNotEmpty) _snack('Coupe précédente reprise (${lines.length} ligne(s)).');
+      _run();
+    } catch (_) {}
+  }
+
+  // ───────────── Feuille d'assemblage ─────────────
+
+  Future<void> _assemblySheet() async {
+    final r = _res;
+    if (r == null || r.pieces.isEmpty) return;
+    const w = 1600.0;
+    final bw = math.max(_b.width, 10).toDouble(), bh = math.max(_b.height, 10).toDouble();
+    final k = (w - 160) / bw;
+    final drawH = bh * k;
+    final lineH = 34.0;
+    final h = 140 + drawH + 60 + lineH * r.pieces.length + 40;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = Colors.white);
+    void text(String t, Offset o, double size, {Color color = Colors.black, FontWeight weight = FontWeight.w500}) {
+      final tp = TextPainter(
+        text: TextSpan(text: t, style: TextStyle(color: color, fontSize: size, fontWeight: weight)),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: w - 80);
+      tp.paint(c, o);
+    }
+
+    text('Feuille d\'assemblage · ${widget.pattern.name}', const Offset(40, 30), 40, weight: FontWeight.w800);
+    text(
+        'Dessin ${(_b.width / 100).toStringAsFixed(1)} × ${(_b.height / 100).toStringAsFixed(1)} cm · '
+        'cadre ${(_hw / 10).toStringAsFixed(0)} × ${(_hh / 10).toStringAsFixed(0)} cm · '
+        '${r.pieces.length} morceaux · recouvrement ${_overlap.toString().replaceAll('.0', '')} mm',
+        const Offset(40, 84),
+        24,
+        color: Colors.black54);
+    c.save();
+    c.translate(80, 140);
+    c.scale(k);
+    c.translate(-_b.minX.toDouble(), -_b.minY.toDouble());
+    final line = Paint()
+      ..strokeWidth = 2.6
+      ..strokeCap = StrokeCap.round;
+    for (var b = 0; b < _geo.points.length; b++) {
+      line.color = _geo.colors[b];
+      c.drawRawPoints(ui.PointMode.lines, _geo.points[b], line);
+    }
+    final cut = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3 / k
+      ..color = const Color(0xFFE11D48);
+    for (final l in _lines) {
+      final p = Path()..moveTo(l.first.$1, l.first.$2);
+      for (final q in l.skip(1)) {
+        p.lineTo(q.$1, q.$2);
+      }
+      c.drawPath(p, cut);
+    }
+    for (var i = 0; i < r.pieces.length; i++) {
+      final wb = r.pieces[i].window;
+      final ctr = Offset((wb.minX + wb.maxX) / 2, (wb.minY + wb.maxY) / 2);
+      c.drawCircle(ctr, 26 / k, Paint()..color = _zoneColors[i % _zoneColors.length]);
+      final tp = TextPainter(
+        text: TextSpan(
+            text: '${r.pieces[i].index}',
+            style: TextStyle(color: Colors.black, fontSize: 30 / k, fontWeight: FontWeight.w900)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(c, ctr - Offset(tp.width / 2, tp.height / 2));
+    }
+    c.restore();
+    var y = 140 + drawH + 40;
+    text('Ordre de couture :', Offset(40, y), 26, weight: FontWeight.w800);
+    y += 40;
+    for (final pc in r.pieces) {
+      final b = pc.pattern.bounds;
+      text(
+          '${pc.index}.  ${(b.width / 100).toStringAsFixed(1)} × ${(b.height / 100).toStringAsFixed(1)} cm · '
+          '${pc.pattern.stitchCount} points · ≈ ${pc.pattern.estimate(800).inMinutes} min'
+          '${pc.cutObjects > 0 ? ' · aligner sur les croix de repérage' : ''}',
+          Offset(60, y),
+          22);
+      y += lineH;
+    }
+    final pic = rec.endRecording();
+    final img = await pic.toImage(w.round(), h.round());
+    pic.dispose();
+    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    if (data == null) return;
+    final bytes = data.buffer.asUint8List();
+    var base = widget.pattern.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (base.isEmpty) base = 'DESIGN';
+    final name = '${base}_assemblage.png';
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
+        await shareBytes(name, bytes);
+      } else {
+        final m = await saveBytesToFolder(name, bytes, 'png');
+        if (m != null) _snack(m);
+      }
+    } catch (e) {
+      _snack('Échec : $e');
+    }
   }
 
   void _undo() {
@@ -340,7 +513,7 @@ class _CutScreenState extends State<CutScreen> {
     _selLine.value = null;
     setState(() {
       _lines.removeLast();
-      _pieceAnchors.clear();
+      _saved.clear();
     });
     _schedule();
   }
@@ -349,7 +522,7 @@ class _CutScreenState extends State<CutScreen> {
     _selLine.value = null;
     setState(() {
       _lines.clear();
-      _pieceAnchors.clear();
+      _saved.clear();
     });
     _schedule();
   }
@@ -362,7 +535,7 @@ class _CutScreenState extends State<CutScreen> {
       _lines
         ..clear()
         ..addAll(lines);
-      _pieceAnchors.clear();
+      _saved.clear();
     });
     if (lines.isEmpty) _snack('Le dessin tient déjà dans le cadre : aucune coupe nécessaire.');
     _schedule();
@@ -373,7 +546,7 @@ class _CutScreenState extends State<CutScreen> {
   void _set(VoidCallback f, {bool keepAnchors = false}) {
     setState(() {
       f();
-      if (!keepAnchors) _pieceAnchors.clear();
+      if (!keepAnchors) _saved.clear();
     });
     _schedule();
   }
@@ -381,31 +554,6 @@ class _CutScreenState extends State<CutScreen> {
   void _snack(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
-
-  Future<void> _exportAll() async {
-    final r = _res;
-    if (r == null || r.pieces.isEmpty) return;
-    final bad = r.pieces.where((p) => !_fits(p)).map((p) => p.index).toList();
-    if (bad.isNotEmpty) {
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text('Morceaux trop grands'),
-          content: Text('Morceau(x) ${bad.join(', ')} dépasse(nt) le cadre '
-              '${(_hw / 10).toStringAsFixed(0)} × ${(_hh / 10).toStringAsFixed(0)} cm. '
-              'Ajoutez une ligne de coupe dans la zone rouge.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Corriger')),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Exporter quand même')),
-          ],
-        ),
-      );
-      if (go != true) return;
-    }
-    final msg = await exportPieces(widget.pattern.name, r.pieces);
-    if (msg != null) _snack(msg);
   }
 
   // ───────────── Interface ─────────────
@@ -448,6 +596,7 @@ class _CutScreenState extends State<CutScreen> {
                   hoopW: _hw * 10,
                   hoopH: _hh * 10,
                   split: showSplit,
+                  showHoop: _step < 2,
                   offsets: showSplit ? _offsets(r) : const {},
                 ),
               ),
@@ -471,7 +620,7 @@ class _CutScreenState extends State<CutScreen> {
         transformationController: _tc,
         minScale: 0.5,
         maxScale: 20,
-        panEnabled: _tool == _Tool.pan,
+        panEnabled: _tool == _Tool.pan || _step != 1,
         scaleEnabled: true,
         boundaryMargin: const EdgeInsets.all(400),
         child: canvas,
@@ -534,8 +683,8 @@ class _CutScreenState extends State<CutScreen> {
         Rect.fromLTRB(pb.minX.toDouble(), pb.minY.toDouble(), pb.maxX.toDouble(), pb.maxY.toDouble()),
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = (_frame ? 5 : 2.5) / k
-          ..color = zc.withValues(alpha: _frame ? 0.9 : 0.5),
+          ..strokeWidth = 3 / k
+          ..color = zc.withValues(alpha: 0.85),
       );
       canvas.restore();
     }
@@ -552,15 +701,40 @@ class _CutScreenState extends State<CutScreen> {
     });
   }
 
-  void _tapPiece(Offset o, Size s) {
+  int? _pieceAt(Offset o, Size s) {
     final r = _res;
-    if (r == null || r.gw == 0) return;
+    if (r == null || r.gw == 0) return null;
     final (x, y) = _toPattern(o, s);
     final cx = ((x - r.gx0) / r.res).floor(), cy = ((y - r.gy0) / r.res).floor();
-    if (cx < 0 || cy < 0 || cx >= r.gw || cy >= r.gh) return;
-    final reg = r.labels[cy * r.gw + cx];
-    final i = r.pieceRegion.indexOf(reg);
-    if (i >= 0) setState(() => _sel = i + 1);
+    if (cx < 0 || cy < 0 || cx >= r.gw || cy >= r.gh) return null;
+    final i = r.pieceRegion.indexOf(r.labels[cy * r.gw + cx]);
+    return i < 0 ? null : i + 1;
+  }
+
+  void _tapPiece(Offset o, Size s) {
+    final i = _pieceAt(o, s);
+    if (i != null) setState(() => _sel = i);
+  }
+
+  Future<void> _openPiece(int index) async {
+    final r = _res;
+    if (r == null || index > r.pieces.length) return;
+    final pc = r.pieces[index - 1];
+    var base = widget.pattern.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (base.isEmpty) base = 'DESIGN';
+    if (base.length > 6) base = base.substring(0, 6);
+    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PieceScreen(
+        piece: pc,
+        hoopWmm: _hw,
+        hoopHmm: _hh,
+        suggestedName: r.pieces.length == 1 ? base : '${base}_$index',
+      ),
+    ));
+    if (ok == true && mounted) {
+      setState(() => _saved.add(index));
+      _persist();
+    }
   }
 
   Widget _rulers(Widget child) {
@@ -650,30 +824,31 @@ class _CutScreenState extends State<CutScreen> {
     );
   }
 
-  Widget _controls() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      luxSection(
-        'Ma machine (cadre)',
+  Widget _hoopSection() => luxSection(
+        'Cadre (tambour) de votre machine',
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Wrap(children: [
             for (final h in hoopPresets)
               luxChip(h.label, !_custom && h == _hoop, () => _set(() {
                     _hoop = h;
                     _custom = false;
-                  }, keepAnchors: true)),
-            luxChip('Autre…', _custom, () => _set(() => _custom = true, keepAnchors: true)),
+                  })),
+            luxChip('Autre…', _custom, () => _set(() => _custom = true)),
           ]),
           if (_custom)
             Row(children: [
-              Expanded(child: _num('Largeur (cm)', _cw / 10, (v) => _set(() => _cw = v * 10, keepAnchors: true))),
+              Expanded(child: _num('Largeur (cm)', _cw / 10, (v) => _set(() => _cw = v * 10))),
               const SizedBox(width: 10),
-              Expanded(child: _num('Hauteur (cm)', _ch / 10, (v) => _set(() => _ch = v * 10, keepAnchors: true))),
+              Expanded(child: _num('Hauteur (cm)', _ch / 10, (v) => _set(() => _ch = v * 10))),
             ]),
-          Text('Dessin : ${(_b.width / 100).toStringAsFixed(1)} × ${(_b.height / 100).toStringAsFixed(1)} cm',
+          Text(
+              'Dessin : ${(_b.width / 100).toStringAsFixed(1)} × ${(_b.height / 100).toStringAsFixed(1)} cm · '
+              'cadre : ${(_hw / 10).toStringAsFixed(0)} × ${(_hh / 10).toStringAsFixed(0)} cm (rectangle doré)',
               style: const TextStyle(color: AppColors.muted, fontSize: 12)),
         ]),
-      ),
-      luxSection(
+      );
+
+  Widget _cutSection() => luxSection(
         'Coupe',
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Recouvrement entre morceaux', style: TextStyle(color: AppColors.muted, fontSize: 12)),
@@ -681,7 +856,7 @@ class _CutScreenState extends State<CutScreen> {
           Wrap(children: [
             for (final v in [0.0, 2.0, 2.5, 3.0, 5.0])
               luxChip(v == 0 ? 'Aucun' : '${v.toString().replaceAll('.0', '')} mm', _overlap == v,
-                  () => _set(() => _overlap = v, keepAnchors: true)),
+                  () => _set(() => _overlap = v)),
           ]),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -689,38 +864,80 @@ class _CutScreenState extends State<CutScreen> {
             value: _marks,
             activeThumbColor: AppColors.gold,
             title: const Text('Croix de repérage aux bouts de chaque ligne'),
-            onChanged: (v) => _set(() => _marks = v, keepAnchors: true),
+            onChanged: (v) => _set(() => _marks = v),
           ),
         ]),
-      ),
-      luxSection(
-        'Cadre de chaque morceau (point droit 5,8 mm, cousu en premier)',
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: _frame,
-            activeThumbColor: AppColors.gold,
-            title: const Text('Cadre autour de chaque morceau'),
-            onChanged: (v) => _set(() => _frame = v, keepAnchors: true),
+      );
+
+  List<Widget> _controls() {
+    switch (_step) {
+      case 0:
+        return [
+          _hoopSection(),
+          GoldButton(
+              label: 'Suivant : couper le dessin',
+              icon: Icons.arrow_forward,
+              onPressed: () => setState(() => _step = 1)),
+        ];
+      case 1:
+        final r = _res;
+        return [
+          _summary(),
+          GoldButton(
+            label: 'J\'ai fini la coupe',
+            icon: Icons.check,
+            busy: _busy,
+            onPressed: r == null || r.pieces.isEmpty
+                ? null
+                : () {
+                    _finishPoly();
+                    setState(() {
+                      _step = 2;
+                      _tool = _Tool.pan;
+                    });
+                  },
           ),
-          Wrap(children: [
-            for (final v in [3.0, 5.0, 8.0, 10.0])
-              luxChip('${v.toInt()} mm', _margin == v, () => _set(() => _margin = v, keepAnchors: true)),
-          ]),
-          const SizedBox(height: 6),
-          Row(children: [
-            AnchorGrid(value: _anchor, onChanged: (a) => _set(() => _anchor = a)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text('Départ de tous les morceaux : ${_anchor.label}.\n'
-                  'Chaque morceau peut avoir le sien (bouton sur sa carte).',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+          const SizedBox(height: 10),
+          _cutSection(),
+          TextButton.icon(
+            onPressed: () => setState(() => _step = 0),
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text('Changer de cadre'),
+          ),
+        ];
+      default:
+        final r = _res;
+        final n = r?.pieces.length ?? 0;
+        return [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              _saved.length >= n && n > 0
+                  ? '✓ Tous les morceaux sont enregistrés'
+                  : 'Touchez un morceau : densité → cadre et départ → enregistrer',
+              style: TextStyle(
+                  color: _saved.length >= n && n > 0 ? AppColors.success : AppColors.goldLight,
+                  fontWeight: FontWeight.w700),
             ),
-          ]),
-        ]),
-      ),
-    ]);
+          ),
+          ..._pieceList(),
+          OutlinedButton.icon(
+            onPressed: _assemblySheet,
+            icon: const Icon(Icons.description_outlined),
+            label: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12), child: Text('Feuille d\'assemblage (image)')),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () => setState(() {
+              _step = 1;
+              _tool = _Tool.line;
+            }),
+            icon: const Icon(Icons.edit, size: 16),
+            label: const Text('Modifier la coupe'),
+          ),
+        ];
+    }
   }
 
   Widget _num(String label, double v, ValueChanged<double> on) => TextFormField(
@@ -765,42 +982,55 @@ class _CutScreenState extends State<CutScreen> {
   List<Widget> _pieceList() {
     final r = _res;
     if (r == null) return const [];
-    final n = r.pieces.length;
     return [
-      for (var i = 0; i < n; i++)
+      for (var i = 0; i < r.pieces.length; i++)
         PieceCard(
           piece: r.pieces[i],
           geo: _geoCache.putIfAbsent(r.pieces[i], () => PatternGeometry.from(r.pieces[i].pattern)),
-          fileName: pieceFileName(widget.pattern.name, r.pieces[i].index, n),
-          anchor: _pieceAnchors[r.pieces[i].index] ?? _anchor,
           hoopWmm: _hw,
           hoopHmm: _hh,
-          tint: _fits(r.pieces[i]) ? _zoneColors[i % _zoneColors.length] : AppColors.danger,
-          selected: _sel == r.pieces[i].index,
-          onTap: () => setState(() => _sel = r.pieces[i].index),
-          onAnchor: () async {
-            final idx = r.pieces[i].index;
-            final a = await pickAnchor(context, 'Départ du morceau $idx', _pieceAnchors[idx] ?? _anchor);
-            if (a != null) _set(() => _pieceAnchors[idx] = a, keepAnchors: true);
-          },
+          tint: _zoneColors[i % _zoneColors.length],
+          saved: _saved.contains(r.pieces[i].index),
+          onTap: () => _openPiece(r.pieces[i].index),
         ),
-      if (n > 0)
-        GoldButton(
-          label: n == 1 ? 'Exporter le fichier DST' : 'Exporter les $n fichiers DST',
-          icon: Icons.download,
-          busy: _busy,
-          onPressed: _exportAll,
-        ),
-      const SizedBox(height: 24),
     ];
+  }
+
+  Widget _stepper() {
+    Widget dot(int i, String l) {
+      final on = _step == i, done = _step > i;
+      return Expanded(
+        child: InkWell(
+          onTap: i < _step ? () => setState(() => _step = i) : null,
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            CircleAvatar(
+              radius: 12,
+              backgroundColor: on || done ? AppColors.gold : AppColors.surface2,
+              child: done
+                  ? const Icon(Icons.check, size: 14, color: Colors.black)
+                  : Text('${i + 1}',
+                      style: TextStyle(
+                          fontSize: 12, color: on ? Colors.black : AppColors.muted, fontWeight: FontWeight.w800)),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(l,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: on ? AppColors.goldLight : AppColors.muted)),
+            ),
+          ]),
+        ),
+      );
+    }
+
+    return Row(children: [dot(0, 'Cadre machine'), dot(1, 'Couper'), dot(2, 'Morceaux')]);
   }
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.of(context).size.width >= 900;
     final work = Column(children: [
-      _toolbar(),
-      const SizedBox(height: 8),
+      if (_step == 1) ...[_toolbar(), const SizedBox(height: 8)],
       Expanded(
         child: Container(
           decoration: BoxDecoration(
@@ -823,27 +1053,28 @@ class _CutScreenState extends State<CutScreen> {
       ),
     ]);
     return Scaffold(
-      appBar: AppBar(title: const Text('Découpe')),
+      appBar: AppBar(title: const Text('Couper le dessin')),
       body: SafeArea(
-        child: wide
-            ? Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Expanded(child: Padding(padding: const EdgeInsets.all(12), child: work)),
-                SizedBox(
-                  width: 430,
-                  child: ListView(
-                      padding: const EdgeInsets.all(12),
-                      children: [_summary(), _controls(), ..._pieceList()]),
-                ),
-              ])
-            : Column(children: [
-                Expanded(flex: 58, child: Padding(padding: const EdgeInsets.fromLTRB(10, 8, 10, 4), child: work)),
-                Expanded(
-                  flex: 42,
-                  child: ListView(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      children: [_summary(), ..._pieceList(), _controls()]),
-                ),
-              ]),
+        child: Column(children: [
+          Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 6), child: _stepper()),
+          Expanded(
+            child: wide
+                ? Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: work)),
+                    SizedBox(
+                      width: 430,
+                      child: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), children: _controls()),
+                    ),
+                  ])
+                : Column(children: [
+                    Expanded(flex: 56, child: Padding(padding: const EdgeInsets.fromLTRB(10, 0, 10, 4), child: work)),
+                    Expanded(
+                      flex: 44,
+                      child: ListView(padding: const EdgeInsets.fromLTRB(12, 4, 12, 12), children: _controls()),
+                    ),
+                  ]),
+          ),
+        ]),
       ),
     );
   }
@@ -903,6 +1134,7 @@ class _LinesPainter extends CustomPainter {
   final int? selected;
   final double hoopW, hoopH;
   final bool split;
+  final bool showHoop;
   final Map<int, Offset> offsets;
 
   _LinesPainter({
@@ -916,6 +1148,7 @@ class _LinesPainter extends CustomPainter {
     required this.hoopW,
     required this.hoopH,
     required this.split,
+    required this.showHoop,
     required this.offsets,
   }) : super(repaint: Listenable.merge([preview, selLine, zoom]));
 
@@ -946,6 +1179,26 @@ class _LinesPainter extends CustomPainter {
       final dot = Paint()..color = col;
       canvas.drawCircle(Offset(pts.first.$1, pts.first.$2), 4.5 * px, dot);
       canvas.drawCircle(Offset(pts.last.$1, pts.last.$2), 4.5 * px, dot);
+    }
+
+    // Cadre de la machine, centré sur le dessin : on voit tout de suite ce qui dépasse.
+    if (showHoop && selected == null) {
+      final c = Offset((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
+      final r = Rect.fromCenter(center: c, width: hoopW, height: hoopH);
+      canvas.drawRect(r, Paint()..color = AppColors.gold.withValues(alpha: 0.06));
+      canvas.drawRect(
+          r,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.5 * px
+            ..color = AppColors.gold);
+      final tp = TextPainter(
+        text: TextSpan(
+            text: 'Cadre ${(hoopW / 100).toStringAsFixed(0)} × ${(hoopH / 100).toStringAsFixed(0)} cm',
+            style: TextStyle(color: AppColors.goldLight, fontSize: 12 * px, fontWeight: FontWeight.w700)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, r.topLeft + Offset(6 * px, 4 * px));
     }
 
     final sl = selLine.value;

@@ -863,3 +863,13 @@ CutResult cutByLines(EmbPattern p, List<List<(double, double)>> lines, PrepOptio
   }
   return CutResult(pieces, pieceRegion, labels, gw, gh, gx0, gy0, res);
 }
+
+/// Rotation d'un quart de tour (sens horaire), pour faire tenir un morceau dans le cadre.
+EmbPattern rotate90(EmbPattern p) =>
+    p.copyWith(stitches: [for (final s in p.stitches) Stitch(-s.y, s.x, s.type)]);
+
+/// Le dessin tient-il dans le cadre (dimensions en mm) ?
+bool fitsHoop(EmbPattern p, double hoopWmm, double hoopHmm) {
+  final b = p.bounds;
+  return b.width <= hoopWmm * 10 && b.height <= hoopHmm * 10;
+}

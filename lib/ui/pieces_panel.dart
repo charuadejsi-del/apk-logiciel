@@ -113,117 +113,118 @@ Widget luxSection(String t, Widget c) => Padding(
       ),
     );
 
-/// Carte d'un morceau : aperçu, taille (et si elle tient dans le cadre), départ, export.
+/// Carte d'un morceau : aperçu, taille, cadre, état ; un appui l'ouvre.
 class PieceCard extends StatelessWidget {
   final PrepPiece piece;
   final PatternGeometry geo;
-  final String fileName;
-  final StartAnchor anchor;
-  final double? hoopWmm, hoopHmm;
-  final Color? tint;
-  final bool selected;
-  final VoidCallback onTap, onAnchor;
+  final double hoopWmm, hoopHmm;
+  final Color tint;
+  final bool saved;
+  final VoidCallback onTap;
 
   const PieceCard({
     super.key,
     required this.piece,
     required this.geo,
-    required this.fileName,
-    required this.anchor,
-    this.hoopWmm,
-    this.hoopHmm,
-    this.tint,
-    this.selected = false,
+    required this.hoopWmm,
+    required this.hoopHmm,
+    required this.tint,
+    required this.saved,
     required this.onTap,
-    required this.onAnchor,
   });
 
   @override
   Widget build(BuildContext context) {
-    final b = piece.pattern.bounds;
+    final p = piece.pattern;
+    final b = p.bounds;
     final w = b.width / 100, h = b.height / 100;
-    String? over;
-    if (hoopWmm != null && hoopHmm != null) {
-      final dw = w - hoopWmm! / 10, dh = h - hoopHmm! / 10;
-      if (dw > 0 || dh > 0) {
-        over = 'Trop grand de ${[if (dw > 0) '${dw.toStringAsFixed(1)} cm en largeur', if (dh > 0) '${dh.toStringAsFixed(1)} cm en hauteur'].join(' et ')}';
-      }
-    }
+    final fits = fitsHoop(p, hoopWmm, hoopHmm);
+    final fitsRot = !fits && fitsHoop(rotate90(p), hoopWmm, hoopHmm);
+    final dur = p.estimate(800);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: LuxCard(
-        highlighted: selected,
         onTap: onTap,
         padding: const EdgeInsets.all(10),
         child: Row(children: [
           Stack(children: [
             SizedBox(
-              width: 92,
-              height: 92,
-              child: RepaintBoundary(child: CustomPaint(painter: PatternPainter(geo, showStartEnd: true))),
+              width: 84,
+              height: 84,
+              child: RepaintBoundary(child: CustomPaint(painter: PatternPainter(geo, realistic: false))),
             ),
-            if (tint != null)
-              Positioned(
-                left: 4,
-                top: 4,
-                child: CircleAvatar(
-                  radius: 11,
-                  backgroundColor: tint,
-                  child: Text('${piece.index}',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.black)),
-                ),
+            Positioned(
+              left: 2,
+              top: 2,
+              child: CircleAvatar(
+                radius: 11,
+                backgroundColor: tint,
+                child: Text('${piece.index}',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.black)),
               ),
+            ),
           ]),
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Morceau ${piece.index} · $fileName', style: const TextStyle(fontWeight: FontWeight.w700)),
-              Text('${w.toStringAsFixed(1)} × ${h.toStringAsFixed(1)} cm · ${piece.pattern.stitchCount} points',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-              if (hoopWmm != null)
-                Text(over ?? '✓ Tient dans le cadre',
-                    style: TextStyle(
-                        color: over == null ? AppColors.success : AppColors.danger,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
-              if (piece.cutObjects > 0)
-                Text('${piece.cutObjects} élément(s) coupé(s) sur la ligne (recouvrement + points d\'arrêt)',
-                    style: const TextStyle(color: AppColors.muted, fontSize: 11)),
               Row(children: [
-                TextButton.icon(
-                  onPressed: onAnchor,
-                  icon: const Icon(Icons.my_location, size: 16),
-                  label: Text(anchor.label, overflow: TextOverflow.ellipsis),
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Exporter ce morceau',
-                  onPressed: () => showModalBottomSheet<void>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => ExportSheet(
-                        pattern: piece.pattern.copyWith(name: fileName.replaceAll('.DST', ''))),
-                  ),
-                  icon: const Icon(Icons.download, color: AppColors.gold),
-                ),
+                Text('Morceau ${piece.index}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                const SizedBox(width: 8),
+                if (saved)
+                  const Icon(Icons.check_circle, color: AppColors.success, size: 18),
+                if (saved)
+                  const Text(' Enregistré', style: TextStyle(color: AppColors.success, fontSize: 12)),
               ]),
+              Text('${w.toStringAsFixed(1)} × ${h.toStringAsFixed(1)} cm · ${p.stitchCount} points',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+              Text('${p.colorBlockCount} couleur(s) · ≈ ${dur.inMinutes} min',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+              Text(
+                fits
+                    ? '✓ Tient dans le cadre'
+                    : (fitsRot ? '↻ Tient en le tournant de 90°' : '✗ Trop grand pour le cadre'),
+                style: TextStyle(
+                    color: fits ? AppColors.success : (fitsRot ? AppColors.goldLight : AppColors.danger),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600),
+              ),
             ]),
           ),
+          const Icon(Icons.chevron_right, color: AppColors.gold),
         ]),
       ),
     );
   }
 }
 
-Future<StartAnchor?> pickAnchor(BuildContext context, String title, StartAnchor cur) =>
-    showModalBottomSheet<StartAnchor>(
-      context: context,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-          const SizedBox(height: 14),
-          AnchorGrid(value: cur, onChanged: (a) => Navigator.pop(ctx, a)),
-        ]),
-      ),
-    );
+/// Enregistre des octets dans un dossier choisi (extension garantie) ; message de résultat.
+Future<String?> saveBytesToFolder(String fileName, Uint8List bytes, String ext) async {
+  final path = await FilePicker.platform.saveFile(
+    dialogTitle: 'Enregistrer $fileName',
+    fileName: fileName,
+    type: FileType.custom,
+    allowedExtensions: [ext],
+    bytes: bytes,
+  );
+  if (path == null) return null;
+  final mobile = Platform.isAndroid || Platform.isIOS;
+  final hasExt = path.toLowerCase().endsWith('.$ext');
+  if (!mobile) {
+    final target = hasExt ? path : '$path.${ext.toUpperCase()}';
+    await File(target).writeAsBytes(bytes, flush: true);
+    return 'Enregistré ✓ $target';
+  }
+  if (!hasExt && !path.startsWith('content://')) {
+    return 'Attention : enregistré sans « .${ext.toUpperCase()} » — renommez le fichier.';
+  }
+  return 'Enregistré ✓';
+}
+
+/// Envoie un fichier (WhatsApp, Fichiers, USB…) en gardant son nom exact.
+Future<void> shareBytes(String fileName, Uint8List bytes) async {
+  final dir = await getTemporaryDirectory();
+  final f = File('${dir.path}/$fileName');
+  await f.writeAsBytes(bytes, flush: true);
+  await Share.shareXFiles([XFile(f.path, mimeType: 'application/octet-stream', name: fileName)],
+      subject: fileName);
+}
